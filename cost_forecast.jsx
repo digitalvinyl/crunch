@@ -1093,7 +1093,7 @@ const RISK_BANDS = {
 // Replaces computeWeeklyOtCost for the main forecast.
 // ═══════════════════════════════════════════════════════════════════════
 function computeEnhancedCost(origHours, baseRate, otRate, otMode, baseWeeks, targetWeeks,
-                              compressionPF, stackingPenalties, riskBand, preAdjHours) {
+                              compressionPF, stackingPenalties, riskBand, preAdjHours, applyOt = true) {
   if (targetWeeks === baseWeeks && otMode === "none" && !stackingPenalties && !preAdjHours)
     return origHours.reduce((s, h) => s + h, 0) * baseRate;
 
@@ -1104,14 +1104,17 @@ function computeEnhancedCost(origHours, baseRate, otRate, otMode, baseWeeks, tar
 
   let cost = 0;
   for (let w = 0; w < targetWeeks; w++) {
-    const rate = getWeekRate(baseRate, otRate, otMode, w, targetWeeks, baseWeeks);
+    // When applyOt=false (task-specific mode, non-compressed discipline), use base rate only
+    const rate = applyOt
+      ? getWeekRate(baseRate, otRate, otMode, w, targetWeeks, baseWeeks)
+      : baseRate;
     const hours = adjHours[w] || 0;
 
     // 1. Base compression penalty (non-linear PF)
     let weekMultiplier = 1 / compressionPF;
 
-    // 2. MCAA cumulative OT fatigue — applied per consecutive OT week
-    if (otMode !== "none" && w >= otStartWeek && numOtWeeks > 0) {
+    // 2. MCAA cumulative OT fatigue — only when this discipline is working OT
+    if (applyOt && otMode !== "none" && w >= otStartWeek && numOtWeeks > 0) {
       const consecutiveOtWeek = w - otStartWeek + 1;
       const mcaaPI = getMCAAFatigue(otMode, consecutiveOtWeek);
       // Scale fatigue by risk band
@@ -1131,16 +1134,18 @@ function computeEnhancedCost(origHours, baseRate, otRate, otMode, baseWeeks, tar
 
 // Get per-week cost details for chart/tooltip use
 function getWeekCostDetail(origHours, baseRate, otRate, otMode, baseWeeks, targetWeeks,
-                            compressionPF, stackingPenalties, week) {
+                            compressionPF, stackingPenalties, week, applyOt = true) {
   const adjHours = redistributeHours(origHours, baseWeeks, targetWeeks);
   const numOtWeeks = getOtWeeks(targetWeeks, baseWeeks, otMode);
   const otStartWeek = targetWeeks - numOtWeeks;
-  const rate = getWeekRate(baseRate, otRate, otMode, week, targetWeeks, baseWeeks);
+  const rate = applyOt
+    ? getWeekRate(baseRate, otRate, otMode, week, targetWeeks, baseWeeks)
+    : baseRate;
   const hours = adjHours[week] || 0;
   let weekMultiplier = 1 / compressionPF;
 
   let mcaaPI = 1.0;
-  if (otMode !== "none" && week >= otStartWeek && numOtWeeks > 0) {
+  if (applyOt && otMode !== "none" && week >= otStartWeek && numOtWeeks > 0) {
     const consecutiveOtWeek = week - otStartWeek + 1;
     mcaaPI = getMCAAFatigue(otMode, consecutiveOtWeek);
     weekMultiplier *= (1 / mcaaPI);
@@ -2356,7 +2361,7 @@ function HoursTab({ disciplines, setDisciplines, hoursData, setHoursData, baseWe
 // ═══════════════════════════════════════════════════════════════════════
 // PDF Report Export — generates a print-optimized HTML report
 // ═══════════════════════════════════════════════════════════════════════
-function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, adjustedWeeks, calendarWeeks, startDate, otMode, disciplinePFs, hoursData, xerSchedule) {
+function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, adjustedWeeks, calendarWeeks, startDate, otMode, otScope, disciplinePFs, hoursData, xerSchedule) {
   try {
   if (!forecast || !optimization) {
     alert("Export unavailable — forecast data is still loading. Please wait a moment and try again.");
@@ -2376,6 +2381,7 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
   const weekOffset = adjustedWeeks - baseWeeks;
   const scenarioType = adjustedWeeks < baseWeeks ? "Accelerated" : adjustedWeeks > baseWeeks ? "Extended" : "Baseline";
   const otLabel = otMode === "none" ? "None" : otMode === "sat" ? "Saturday OT (60 hrs/wk)" : "Sat + Sun OT (70 hrs/wk)";
+  const otScopeLabel = otScope === "task" ? "Task-Specific" : "Project-Wide";
   const hasOverrides = disciplinePFs && Object.keys(disciplinePFs).length > 0;
 
 
@@ -3058,7 +3064,7 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
 <h1><span style="color:#d97706;font-size:28px">⟪</span> CRUNCH <span style="font-size:16px;font-weight:400;color:#6b7280">— EAC Forecast Report</span></h1>
 <div class="sub">
   Report Date: ${fmtDate(new Date())} &nbsp;·&nbsp; Project Start: ${startDate} &nbsp;·&nbsp; Scenario: ${scenarioType}
-  ${otMode !== "none" ? ` &nbsp;·&nbsp; ${otLabel}` : ''}
+  ${otMode !== "none" ? ` &nbsp;·&nbsp; ${otLabel} (${otScopeLabel})` : ''}
 </div>
 
 <div class="metrics">
@@ -3151,7 +3157,7 @@ ${forecast.waterfallData && forecast.waterfallData.length > 2 ? `
 <h2>Model Parameters &amp; Assumptions</h2>
 <table class="params">
   <tr><td>Schedule Scenario</td><td>${scenarioType} (${weekOffset === 0 ? 'no change' : (weekOffset > 0 ? '+' : '') + weekOffset + ' weeks'})</td></tr>
-  <tr><td>Overtime Mode</td><td>${otLabel}</td></tr>
+  <tr><td>Overtime Mode</td><td>${otLabel}${otMode !== "none" ? ` — ${otScopeLabel}` : ''}</td></tr>
   ${forecast.numOtWeeks > 0 ? `<tr><td>OT Weeks Applied</td><td>${forecast.numOtWeeks} weeks (avg MCAA fatigue PI: ${(forecast.avgMCAAFatigue || 1).toFixed(3)})</td></tr>` : ''}
   <tr><td>Acceleration PF (BRT)</td><td>${ACCEL_PF.toFixed(2)} (fixed — BRT/MCAA empirical${adjustedWeeks < baseWeeks ? ', effective: ' + (forecast.globalPF || 1).toFixed(3) : ''})</td></tr>
   <tr><td>Extension PF</td><td>${EXTENSION_PF.toFixed(2)} (fixed — no gain per BRT data)</td></tr>
@@ -3285,7 +3291,7 @@ ${cmbSvg}
   }
 }
 
-function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, weekOffset, setWeekOffset, otMode, disciplinePFs, exportRef, pendingExport, xerSchedule }) {
+function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, weekOffset, setWeekOffset, otMode, otScope, disciplinePFs, exportRef, pendingExport, xerSchedule }) {
   const COLORS = useColors();
   const styles = getStyles(COLORS);
   const [showByDiscipline, setShowByDiscipline] = useState(false);
@@ -3370,6 +3376,13 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
       const baseCost = totalHrs * d.rate;
       const discPF = getDiscPF(d.id);
 
+      // Determine if this discipline's tasks were actually compressed
+      // In "task" scope mode, only compressed disciplines get OT rates/fatigue
+      const discIsCompressed = hasPerDiscPF
+        ? (perDiscPFMap[d.id] !== undefined && perDiscPFMap[d.id] < 1.0)
+        : (effectiveWeeks < baseWeeks);
+      const discApplyOt = otScope === "zone" || discIsCompressed;
+
       // Use CPM-derived hours when available, else proportional redistribution
       const adjHours = cpmForHours
         ? (cpmForHours.hoursData[d.id] || new Array(effectiveWeeks).fill(0))
@@ -3378,7 +3391,7 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
 
       // Enhanced cost with MCAA fatigue + stacking (full calculation)
       const adjCost = computeEnhancedCost(origHours, d.rate, d.otRate, otMode, baseWeeks,
-        effectiveWeeks, discPF, stackingPenalties, RISK_BANDS.P50, adjHours);
+        effectiveWeeks, discPF, stackingPenalties, RISK_BANDS.P50, adjHours, discApplyOt);
 
       // Waterfall: Stage 1 — redistributed hours × base rate only
       wf_redistributedCost += adjTotalHrs * d.rate;
@@ -3388,7 +3401,7 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
 
       // Waterfall: Stage 3 — with PF + OT rates (no MCAA fatigue or stacking)
       const costPFplusOT = computeEnhancedCost(origHours, d.rate, d.otRate, otMode, baseWeeks,
-        effectiveWeeks, discPF, null, { pfScale: 1.0, fatigueScale: 0, stackScale: 0 }, adjHours);
+        effectiveWeeks, discPF, null, { pfScale: 1.0, fatigueScale: 0, stackScale: 0 }, adjHours, discApplyOt);
       wf_costWithPFandOT += costPFplusOT;
 
       const effectiveRate = totalHrs > 0 ? adjCost / totalHrs : d.rate;
@@ -3403,6 +3416,7 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
         rate: d.rate,
         effectiveRate,
         compressionPF: discPF,
+        otActive: discApplyOt,
       };
 
       totalBaseDirectCost += baseCost;
@@ -3577,7 +3591,7 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
       effectivePF: globalPF,
       effectiveWeeks,
     };
-  }, [disciplines, hoursData, timeCosts, baseWeeks, adjustedWeeks, startDate, maxCompression, maxExtension, otMode, disciplinePFs, xerSchedule]);
+  }, [disciplines, hoursData, timeCosts, baseWeeks, adjustedWeeks, startDate, maxCompression, maxExtension, otMode, otScope, disciplinePFs, xerSchedule]);
 
   // End date uses CPM effective weeks (which may differ from slider target due to logic links)
   const adjustedEndDate = new Date(startDate);
@@ -3633,6 +3647,10 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
       }
 
       const getDiscPFOpt = (discId) => hasPerDiscPF ? (perDiscPFMap[discId] || 1.0) : uniformPF;
+      const getDiscApplyOt = (discId) => {
+        if (otScope === "zone") return true;
+        return hasPerDiscPF ? (perDiscPFMap[discId] !== undefined && perDiscPFMap[discId] < 1.0) : (ew < baseWeeks);
+      };
 
       // Stacking penalties for this duration (using CPM hours when available)
       const cpmAdj = cpmResult ? cpmResult.hoursData : null;
@@ -3643,7 +3661,7 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
         const adjH = cpmResult ? (cpmResult.hoursData[di.id] || []) : null;
         const discPF = getDiscPFOpt(di.id);
         return s + computeEnhancedCost(di.origHours, di.rate, di.otRate, otMode, baseWeeks, ew,
-          discPF, stackPenalties, RISK_BANDS.P50, adjH);
+          discPF, stackPenalties, RISK_BANDS.P50, adjH, getDiscApplyOt(di.id));
       }, 0);
 
       // P80 cost (pessimistic)
@@ -3652,7 +3670,7 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
         const discPF = getDiscPFOpt(di.id);
         const pfP80 = ew < baseWeeks ? (1.0 + (discPF - 1.0) * RISK_BANDS.P80.pfScale) : discPF;
         return s + computeEnhancedCost(di.origHours, di.rate, di.otRate, otMode, baseWeeks, ew,
-          pfP80, stackPenalties, RISK_BANDS.P80, adjH);
+          pfP80, stackPenalties, RISK_BANDS.P80, adjH, getDiscApplyOt(di.id));
       }, 0);
 
       // P90 cost (very pessimistic)
@@ -3661,7 +3679,7 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
         const discPF = getDiscPFOpt(di.id);
         const pfP90 = ew < baseWeeks ? (1.0 + (discPF - 1.0) * RISK_BANDS.P90.pfScale) : discPF;
         return s + computeEnhancedCost(di.origHours, di.rate, di.otRate, otMode, baseWeeks, ew,
-          pfP90, stackPenalties, RISK_BANDS.P90, adjH);
+          pfP90, stackPenalties, RISK_BANDS.P90, adjH, getDiscApplyOt(di.id));
       }, 0);
 
       // Weighted-average PF for display in curve data
@@ -3725,7 +3743,7 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
       currentP80,
       currentP90,
     };
-  }, [disciplines, hoursData, timeCosts, baseWeeks, adjustedWeeks, minWeeks, maxWeeks, maxCompression, maxExtension, startDate, otMode, xerSchedule]);
+  }, [disciplines, hoursData, timeCosts, baseWeeks, adjustedWeeks, minWeeks, maxWeeks, maxCompression, maxExtension, startDate, otMode, otScope, xerSchedule]);
 
   const timeCostBreakdown = timeCosts.map((t) => {
     const weeklyRate = t.basis === "weekly" ? t.rate : t.rate / 4.33;
@@ -3741,7 +3759,7 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
   useEffect(() => {
     if (exportRef) {
       exportRef.current = () => {
-        exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, adjustedWeeks, calendarWeeks, startDate, otMode, disciplinePFs, hoursData, xerSchedule);
+        exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, adjustedWeeks, calendarWeeks, startDate, otMode, otScope, disciplinePFs, hoursData, xerSchedule);
       };
     }
     // If a pending export was requested (e.g., clicked from another tab), fire it now
@@ -6705,6 +6723,36 @@ function OtModeButtons({ otMode, setOtMode, weekOffset, setWeekOffset, baseWeeks
   );
 }
 
+function OtScopeToggle({ otScope, setOtScope, compact = false }) {
+  const COLORS = useColors();
+  const size = compact ? { padding: "2px 6px", fontSize: 9 } : { padding: "3px 8px", fontSize: 10 };
+  const options = [
+    { key: "zone", label: "Project-Wide" },
+    { key: "task", label: "Task-Specific" },
+  ];
+  return (
+    <div style={{ display: "flex", gap: compact ? 1 : 2, background: COLORS.bg, borderRadius: 3, padding: 1 }} role="radiogroup" aria-label="Overtime scope">
+      {options.map(({ key, label }) => (
+        <button
+          key={key}
+          role="radio"
+          aria-checked={otScope === key}
+          aria-label={`${label} overtime scope`}
+          style={{
+            ...size, fontWeight: 600, border: "none", borderRadius: 2, cursor: "pointer",
+            background: otScope === key ? COLORS.accent : "transparent",
+            color: otScope === key ? COLORS.bg : COLORS.textDim,
+            fontFamily: FONT, whiteSpace: "nowrap",
+          }}
+          onClick={() => setOtScope(key)}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function DiamondMarkers({ optimalByOt, otMode, sliderMinWeeks, baseWeeks, noOtMaxWeeks, size = 8 }) {
   const COLORS = useColors();
   const sMin = sliderMinWeeks - baseWeeks;
@@ -6758,6 +6806,7 @@ function CostForecastApp() {
   // Shared schedule adjustment state (used by Adjustments & EAC Forecast tabs)
   const [weekOffset, setWeekOffset] = useState(0);
   const [otMode, setOtMode] = useState("none");
+  const [otScope, setOtScope] = useState("zone"); // "zone" = project-wide OT, "task" = only compressed disciplines
   // Per-discipline PF additional degradation: { [discId]: number } — multiplied with model PF (1.0 = no extra loss)
   const [disciplinePFs, setDisciplinePFs] = useState({});
   // XER schedule for task-level CPM compression (lifted from HoursTab)
@@ -7051,6 +7100,7 @@ function CostForecastApp() {
               {adjustedEndDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
             </div>
             <OtModeButtons otMode={otMode} setOtMode={setOtMode} weekOffset={weekOffset} setWeekOffset={setWeekOffset} baseWeeks={baseWeeks} hoursData={hoursData} xerSchedule={xerSchedule} compact={true} />
+            {otMode !== "none" && <OtScopeToggle otScope={otScope} setOtScope={setOtScope} compact={true} />}
           </div>
         </div>
       )}
@@ -7070,6 +7120,13 @@ function CostForecastApp() {
                 <OtModeButtons otMode={otMode} setOtMode={setOtMode} weekOffset={weekOffset} setWeekOffset={setWeekOffset} baseWeeks={baseWeeks} hoursData={hoursData} xerSchedule={xerSchedule} />
                 <div style={{ fontSize: 9, color: COLORS.textMuted, marginTop: 2 }}>Progressive — slide to add OT</div>
               </div>
+              {otMode !== "none" && (
+                <div style={{ textAlign: "center" }}>
+                  <div style={{ fontSize: 11, color: COLORS.textDim, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 4 }}>OT Scope</div>
+                  <OtScopeToggle otScope={otScope} setOtScope={setOtScope} />
+                  <div style={{ fontSize: 9, color: COLORS.textMuted, marginTop: 2 }}>{otScope === "zone" ? "All disciplines work OT" : "Only compressed tasks"}</div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -7197,7 +7254,7 @@ function CostForecastApp() {
         {activeTab === "hours" && <HoursTab disciplines={disciplines} setDisciplines={setDisciplines} hoursData={hoursData} setHoursData={setHoursData} baseWeeks={baseWeeks} setBaseWeeks={setBaseWeeks} startDate={startDate} setStartDate={setStartDate} setWeekOffset={setWeekOffset} setDisciplinePFs={setDisciplinePFs} xerSchedule={xerSchedule} setXerSchedule={setXerSchedule} />}
         {activeTab === "data" && <DataTab disciplines={disciplines} hoursData={hoursData} timeCosts={timeCosts} timeCostData={timeCostData} baseWeeks={baseWeeks} startDate={startDate} />}
         {activeTab === "adjustments" && <AdjustmentsTab disciplines={disciplines} hoursData={hoursData} timeCosts={timeCosts} timeCostData={timeCostData} baseWeeks={baseWeeks} startDate={startDate} weekOffset={weekOffset} otMode={otMode} disciplinePFs={disciplinePFs} setDisciplinePFs={setDisciplinePFs} xerSchedule={xerSchedule} />}
-        {activeTab === "forecast" && <ForecastTab disciplines={disciplines} hoursData={hoursData} timeCosts={timeCosts} baseWeeks={baseWeeks} startDate={startDate} weekOffset={weekOffset} setWeekOffset={setWeekOffset} otMode={otMode} disciplinePFs={disciplinePFs} exportRef={exportRef} pendingExport={pendingExport} xerSchedule={xerSchedule} />}
+        {activeTab === "forecast" && <ForecastTab disciplines={disciplines} hoursData={hoursData} timeCosts={timeCosts} baseWeeks={baseWeeks} startDate={startDate} weekOffset={weekOffset} setWeekOffset={setWeekOffset} otMode={otMode} otScope={otScope} disciplinePFs={disciplinePFs} exportRef={exportRef} pendingExport={pendingExport} xerSchedule={xerSchedule} />}
         {activeTab === "models" && <ModelsTab baseWeeks={baseWeeks} hoursData={hoursData} disciplines={disciplines} xerSchedule={xerSchedule} />}
       </div>
       </div>{/* end mainContent */}
