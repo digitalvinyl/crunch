@@ -1548,6 +1548,25 @@ function HoursTab({ disciplines, setDisciplines, hoursData, setHoursData, baseWe
   const [scheduleHover, setScheduleHover] = useState(null);
   const fileInputRef = useRef(null);
 
+  // Detect auto-loaded XER schedule and populate summary for display
+  useEffect(() => {
+    if (xerSchedule && !xerSummary) {
+      setXerSummary({
+        taskCount: xerSchedule.activities?.length || 0,
+        assignmentCount: 0,
+        totalHours: Object.values(hoursData).reduce((s, arr) => s + arr.reduce((a, b) => a + b, 0), 0),
+        disciplineCount: disciplines.length,
+        projectName: "Pump House-1",
+        projectCount: 1,
+        totalTasksInFile: xerSchedule.activities?.length || 0,
+        skipped: { proj: 0, wbs: 0, loe: 0, dates: 0 },
+        totalRsrcInFile: 0,
+        fileName: "Pump House-1.xer (default)",
+        groupBy: "resource",
+      });
+    }
+  }, [xerSchedule]);
+
   const handleXerImport = (text, fileName) => {
     try {
       setXerError(null);
@@ -1585,15 +1604,47 @@ function HoursTab({ disciplines, setDisciplines, hoursData, setHoursData, baseWe
   };
 
   const handleResetToDemo = () => {
-    setDisciplines(defaultDisciplines);
-    setHoursData(defaultHoursData);
-    setBaseWeeks(NUM_WEEKS);
-    setStartDate("2024-09-23");
-    setWeekOffset(0);
-    setDisciplinePFs({});
-    setXerSummary(null);
-    setXerError(null);
-    setXerSchedule(null);
+    // Re-load default XER schedule (Pump House-1)
+    fetch("Pump House-1.xer")
+      .then(r => { if (!r.ok) throw new Error("fetch failed"); return r.text(); })
+      .then(text => {
+        try {
+          const result = processXER(text);
+          setDisciplines(result.disciplines);
+          setHoursData(result.hoursData);
+          setBaseWeeks(result.baseWeeks);
+          setStartDate(result.startDate);
+          setWeekOffset(0);
+          setDisciplinePFs({});
+          setXerSummary({ ...result.summary, fileName: "Pump House-1.xer", groupBy: result.groupBy });
+          setXerError(null);
+          setXerSchedule(result.schedule || null);
+          setScheduleCollapsed({});
+        } catch (e) {
+          // Fallback to hardcoded if parse fails
+          setDisciplines(defaultDisciplines);
+          setHoursData(defaultHoursData);
+          setBaseWeeks(NUM_WEEKS);
+          setStartDate("2024-09-23");
+          setWeekOffset(0);
+          setDisciplinePFs({});
+          setXerSummary(null);
+          setXerError(null);
+          setXerSchedule(null);
+        }
+      })
+      .catch(() => {
+        // Fallback to hardcoded defaults if fetch fails
+        setDisciplines(defaultDisciplines);
+        setHoursData(defaultHoursData);
+        setBaseWeeks(NUM_WEEKS);
+        setStartDate("2024-09-23");
+        setWeekOffset(0);
+        setDisciplinePFs({});
+        setXerSummary(null);
+        setXerError(null);
+        setXerSchedule(null);
+      });
   };
 
   const updateHours = (discId, weekIdx, value) => {
@@ -6853,6 +6904,32 @@ function CostForecastApp() {
     });
     return data;
   });
+
+  // Auto-load default XER schedule on first mount
+  const xerLoadedRef = useRef(false);
+  useEffect(() => {
+    if (xerLoadedRef.current) return;
+    xerLoadedRef.current = true;
+    fetch("Pump House-1.xer")
+      .then(r => { if (!r.ok) throw new Error("XER fetch failed"); return r.text(); })
+      .then(text => {
+        try {
+          const result = processXER(text);
+          setDisciplines(result.disciplines);
+          setHoursData(result.hoursData);
+          setBaseWeeks(result.baseWeeks);
+          setStartDate(result.startDate);
+          setWeekOffset(0);
+          setDisciplinePFs({});
+          setXerSchedule(result.schedule || null);
+        } catch (e) {
+          console.warn("Default XER parse failed, using hardcoded demo data:", e.message);
+        }
+      })
+      .catch(e => {
+        console.warn("Default XER load failed, using hardcoded demo data:", e.message);
+      });
+  }, []);
 
   // Re-sync timeCostData when timeCosts rates change (e.g. via Setup tab)
   useEffect(() => {
