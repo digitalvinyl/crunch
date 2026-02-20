@@ -4613,7 +4613,8 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
                 const baseDur = Math.round(r.baseEndDay - r.baseStartDay);
                 const adjDur = Math.round(r.adjEndDay - r.adjStartDay);
                 const finishImprove = Math.round(r.baseEndDay - r.adjEndDay);
-                const inOt = otMode !== "none" && otStartDay >= 0 && r.adjEndDay > otStartDay;
+                const inOtZoneTT = otMode !== "none" && otStartDay >= 0 && r.adjEndDay > otStartDay;
+                const inOt = inOtZoneTT && (otScope === "zone" || r.isCritical || r.isCompressed);
                 const startShiftD = Math.round(r.baseStartDay - r.adjStartDay);
                 const durCompD = Math.max(0, baseDur - adjDur);
                 return (
@@ -4774,7 +4775,9 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
                 const startDelta = Math.round(row.baseStartDay - row.adjStartDay);
                 const durationDelta = baseDur - adjDur;
                 const inOtZone = otStartDay >= 0 && row.adjEndDay > otStartDay && row.adjStartDay < maxDay;
-                const taskUsesOt = otMode !== "none" && inOtZone;
+                // In task-specific OT mode, only critical/compressed tasks actually work OT
+                const taskUsesOt = otMode !== "none" && inOtZone
+                  && (otScope === "zone" || row.isCritical || row.isCompressed);
 
                 // Bar vertical layout: adjusted bar upper, baseline bar lower
                 const adjBarTop = 3;
@@ -6723,7 +6726,7 @@ function OtModeButtons({ otMode, setOtMode, weekOffset, setWeekOffset, baseWeeks
   );
 }
 
-function OtScopeToggle({ otScope, setOtScope, compact = false }) {
+function OtScopeToggle({ otScope, setOtScope, compact = false, disabled = false }) {
   const COLORS = useColors();
   const size = compact ? { padding: "2px 6px", fontSize: 9 } : { padding: "3px 8px", fontSize: 10 };
   const options = [
@@ -6731,20 +6734,22 @@ function OtScopeToggle({ otScope, setOtScope, compact = false }) {
     { key: "task", label: "Task-Specific" },
   ];
   return (
-    <div style={{ display: "flex", gap: compact ? 1 : 2, background: COLORS.bg, borderRadius: 3, padding: 1 }} role="radiogroup" aria-label="Overtime scope">
+    <div style={{ display: "flex", gap: compact ? 1 : 2, background: COLORS.bg, borderRadius: 3, padding: 1, opacity: disabled ? 0.4 : 1 }} role="radiogroup" aria-label="Overtime scope">
       {options.map(({ key, label }) => (
         <button
           key={key}
           role="radio"
           aria-checked={otScope === key}
+          aria-disabled={disabled}
           aria-label={`${label} overtime scope`}
           style={{
-            ...size, fontWeight: 600, border: "none", borderRadius: 2, cursor: "pointer",
-            background: otScope === key ? COLORS.accent : "transparent",
+            ...size, fontWeight: 600, border: "none", borderRadius: 2,
+            cursor: disabled ? "default" : "pointer",
+            background: otScope === key ? (disabled ? COLORS.textMuted : COLORS.accent) : "transparent",
             color: otScope === key ? COLORS.bg : COLORS.textDim,
             fontFamily: FONT, whiteSpace: "nowrap",
           }}
-          onClick={() => setOtScope(key)}
+          onClick={() => { if (!disabled) setOtScope(key); }}
         >
           {label}
         </button>
@@ -7100,7 +7105,7 @@ function CostForecastApp() {
               {adjustedEndDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
             </div>
             <OtModeButtons otMode={otMode} setOtMode={setOtMode} weekOffset={weekOffset} setWeekOffset={setWeekOffset} baseWeeks={baseWeeks} hoursData={hoursData} xerSchedule={xerSchedule} compact={true} />
-            {otMode !== "none" && <OtScopeToggle otScope={otScope} setOtScope={setOtScope} compact={true} />}
+            <OtScopeToggle otScope={otScope} setOtScope={setOtScope} compact={true} disabled={otMode === "none"} />
           </div>
         </div>
       )}
@@ -7120,13 +7125,11 @@ function CostForecastApp() {
                 <OtModeButtons otMode={otMode} setOtMode={setOtMode} weekOffset={weekOffset} setWeekOffset={setWeekOffset} baseWeeks={baseWeeks} hoursData={hoursData} xerSchedule={xerSchedule} />
                 <div style={{ fontSize: 9, color: COLORS.textMuted, marginTop: 2 }}>Progressive — slide to add OT</div>
               </div>
-              {otMode !== "none" && (
-                <div style={{ textAlign: "center" }}>
-                  <div style={{ fontSize: 11, color: COLORS.textDim, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 4 }}>OT Scope</div>
-                  <OtScopeToggle otScope={otScope} setOtScope={setOtScope} />
-                  <div style={{ fontSize: 9, color: COLORS.textMuted, marginTop: 2 }}>{otScope === "zone" ? "All disciplines work OT" : "Only compressed tasks"}</div>
-                </div>
-              )}
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 11, color: COLORS.textDim, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 4 }}>OT Scope</div>
+                <OtScopeToggle otScope={otScope} setOtScope={setOtScope} disabled={otMode === "none"} />
+                <div style={{ fontSize: 9, color: COLORS.textMuted, marginTop: 2 }}>{otMode === "none" ? "Enable OT to configure" : otScope === "zone" ? "All disciplines work OT" : "Only compressed tasks"}</div>
+              </div>
             </div>
           </div>
 
