@@ -876,7 +876,21 @@ function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
     totalFloat: Math.max(0, t.totalFloat), // post-compression float for tooltip display
   })).sort((a, b) => a.adjEndDay - b.adjEndDay || a.adjStartDay - b.adjStartDay);
 
-  return { hoursData, achievedWeeks, taskBars, otFloor, otWorkDays };
+  // Per-discipline compression ratios — aggregated from task-level compression
+  // Used to compute per-discipline PF instead of a single global PF
+  const discCompression = {};
+  Object.values(taskMap).forEach(t => {
+    if (!t.discId) return;
+    if (!discCompression[t.discId]) discCompression[t.discId] = { origDays: 0, newDays: 0 };
+    discCompression[t.discId].origDays += t.origDays;
+    discCompression[t.discId].newDays += t.newDays;
+  });
+  Object.keys(discCompression).forEach(k => {
+    const dc = discCompression[k];
+    dc.ratio = dc.origDays > 0 ? dc.newDays / dc.origDays : 1.0;
+  });
+
+  return { hoursData, achievedWeeks, taskBars, otFloor, otWorkDays, discCompression };
 }
 
 // Get minimum achievable weeks using CPM at max OT compression
@@ -959,6 +973,30 @@ function getNonLinearPF(w, baseWeeks, otCap, hoursData) {
   // Power curve: gentle at low compression, steep at high
   const nonLinearFrac = Math.pow(compressionFrac, PF_CURVE_ALPHA);
   return 1.0 + (ACCEL_PF - 1.0) * nonLinearFrac;
+}
+
+// Per-discipline PF from CPM task-level compression data.
+// Each discipline's PF is based on how much its own tasks were actually compressed,
+// rather than applying a single global PF to all disciplines uniformly.
+// A discipline with no compressed tasks (ratio=1.0) gets PF=1.0 (no penalty).
+function getPerDisciplinePF(discCompression) {
+  if (!discCompression) return {};
+  // Maximum compression ratio achievable: 5/7 (every day becomes a work day)
+  const maxCompressionRatio = 5 / 7;
+  const range = 1.0 - maxCompressionRatio; // ~0.286
+  const pfMap = {};
+  Object.keys(discCompression).forEach(discId => {
+    const { ratio } = discCompression[discId];
+    if (ratio >= 1.0) {
+      pfMap[discId] = 1.0; // no compression → no penalty
+    } else {
+      // Map ratio to compression fraction: 1.0→0 (none), maxRatio→1 (full)
+      const compressionFrac = Math.min(1, (1.0 - ratio) / range);
+      const nonLinearFrac = Math.pow(compressionFrac, PF_CURVE_ALPHA);
+      pfMap[discId] = 1.0 + (ACCEL_PF - 1.0) * nonLinearFrac;
+    }
+  });
+  return pfMap;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -3287,20 +3325,30 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
     // Effective duration: CPM may yield slightly different weeks due to logic links
     const effectiveWeeks = useCpmHours ? cpmResult.achievedWeeks : adjustedWeeks;
 
-    // Compute global PF as fallback
-    let globalPF = 1.0;
+    // Per-discipline PF: when CPM is available, each discipline gets its own PF
+    // based on how much its tasks were actually compressed. Non-critical disciplines
+    // (with float, never compressed) get PF=1.0. Without CPM, falls back to uniform global PF.
+    const perDiscPFMap = (useCpmHours && cpmResult.discCompression && effectiveWeeks < baseWeeks)
+      ? getPerDisciplinePF(cpmResult.discCompression)
+      : {};
+    const hasPerDiscPF = Object.keys(perDiscPFMap).length > 0;
+
+    // Uniform fallback PF for non-CPM mode or extension
+    let uniformPF = 1.0;
     if (effectiveWeeks < baseWeeks) {
-      globalPF = getNonLinearPF(effectiveWeeks, baseWeeks, otCap, hoursData);
+      uniformPF = getNonLinearPF(effectiveWeeks, baseWeeks, otCap, hoursData);
     } else if (effectiveWeeks > baseWeeks && maxExtension > 0) {
       const extensionFrac = (effectiveWeeks - baseWeeks) / maxExtension;
-      globalPF = 1.0 + (EXTENSION_PF - 1.0) * extensionFrac;
+      uniformPF = 1.0 + (EXTENSION_PF - 1.0) * extensionFrac;
     }
 
-    // Per-discipline PF: global PF × additional degradation factor (1.0 = no extra loss)
+    // Get PF for a specific discipline: per-disc CPM PF > uniform fallback > extension PF
+    // Then multiply by any additional user-specified degradation factor
     const getDiscPF = (discId) => {
+      const basePF = hasPerDiscPF ? (perDiscPFMap[discId] || 1.0) : uniformPF;
       const addlFactor = disciplinePFs[discId];
-      if (addlFactor !== undefined && addlFactor !== null) return globalPF * addlFactor;
-      return globalPF;
+      if (addlFactor !== undefined && addlFactor !== null) return basePF * addlFactor;
+      return basePF;
     };
 
     // Compute trade stacking penalties per week (uses CPM hours when available)
@@ -3366,6 +3414,19 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
       let piSum = 0;
       for (let i = 1; i <= numOtWeeks; i++) piSum += getMCAAFatigue(otMode, i);
       avgMCAAFatigue = piSum / numOtWeeks;
+    }
+
+    // Compute weighted-average global PF for display purposes
+    // Weighted by base cost so larger disciplines have more influence
+    let globalPF = uniformPF;
+    if (hasPerDiscPF && totalBaseDirectCost > 0) {
+      let weightedPFSum = 0;
+      disciplines.forEach(d => {
+        const baseCost = (hoursData[d.id] || []).reduce((s, h) => s + h, 0) * d.rate;
+        const discPF = getDiscPF(d.id);
+        weightedPFSum += discPF * baseCost;
+      });
+      globalPF = weightedPFSum / totalBaseDirectCost;
     }
 
     const weeklyTimeCostRate = timeCosts.reduce((s, t) => {
@@ -3556,14 +3617,22 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
       }
       const ew = cpmResult ? cpmResult.achievedWeeks : w; // effective weeks
 
-      // Non-linear PF (power curve, α=1.8, fitted to BRT/MCAA data)
-      let effectivePF = 1.0;
+      // Per-discipline PF from CPM compression data (or uniform fallback)
+      const perDiscPFMap = (cpmResult && cpmResult.discCompression && ew < baseWeeks)
+        ? getPerDisciplinePF(cpmResult.discCompression)
+        : {};
+      const hasPerDiscPF = Object.keys(perDiscPFMap).length > 0;
+
+      // Uniform fallback PF (used when no CPM or for extension)
+      let uniformPF = 1.0;
       if (ew < baseWeeks) {
-        effectivePF = getNonLinearPF(ew, baseWeeks, otCap, hoursData);
+        uniformPF = getNonLinearPF(ew, baseWeeks, otCap, hoursData);
       } else if (ew > baseWeeks && maxExtension > 0) {
         const extensionFrac = (ew - baseWeeks) / maxExtension;
-        effectivePF = 1.0 + (EXTENSION_PF - 1.0) * extensionFrac;
+        uniformPF = 1.0 + (EXTENSION_PF - 1.0) * extensionFrac;
       }
+
+      const getDiscPFOpt = (discId) => hasPerDiscPF ? (perDiscPFMap[discId] || 1.0) : uniformPF;
 
       // Stacking penalties for this duration (using CPM hours when available)
       const cpmAdj = cpmResult ? cpmResult.hoursData : null;
@@ -3572,25 +3641,36 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
       // P50 cost (base/expected)
       const directCost = discInfo.reduce((s, di) => {
         const adjH = cpmResult ? (cpmResult.hoursData[di.id] || []) : null;
+        const discPF = getDiscPFOpt(di.id);
         return s + computeEnhancedCost(di.origHours, di.rate, di.otRate, otMode, baseWeeks, ew,
-          effectivePF, stackPenalties, RISK_BANDS.P50, adjH);
+          discPF, stackPenalties, RISK_BANDS.P50, adjH);
       }, 0);
 
       // P80 cost (pessimistic)
-      const pfP80 = ew < baseWeeks ? (1.0 + (effectivePF - 1.0) * RISK_BANDS.P80.pfScale) : effectivePF;
       const directCostP80 = discInfo.reduce((s, di) => {
         const adjH = cpmResult ? (cpmResult.hoursData[di.id] || []) : null;
+        const discPF = getDiscPFOpt(di.id);
+        const pfP80 = ew < baseWeeks ? (1.0 + (discPF - 1.0) * RISK_BANDS.P80.pfScale) : discPF;
         return s + computeEnhancedCost(di.origHours, di.rate, di.otRate, otMode, baseWeeks, ew,
           pfP80, stackPenalties, RISK_BANDS.P80, adjH);
       }, 0);
 
       // P90 cost (very pessimistic)
-      const pfP90 = ew < baseWeeks ? (1.0 + (effectivePF - 1.0) * RISK_BANDS.P90.pfScale) : effectivePF;
       const directCostP90 = discInfo.reduce((s, di) => {
         const adjH = cpmResult ? (cpmResult.hoursData[di.id] || []) : null;
+        const discPF = getDiscPFOpt(di.id);
+        const pfP90 = ew < baseWeeks ? (1.0 + (discPF - 1.0) * RISK_BANDS.P90.pfScale) : discPF;
         return s + computeEnhancedCost(di.origHours, di.rate, di.otRate, otMode, baseWeeks, ew,
           pfP90, stackPenalties, RISK_BANDS.P90, adjH);
       }, 0);
+
+      // Weighted-average PF for display in curve data
+      let effectivePF = uniformPF;
+      if (hasPerDiscPF && totalBaseDirectCost > 0) {
+        let weightedSum = 0;
+        discInfo.forEach(di => { weightedSum += getDiscPFOpt(di.id) * di.baseCost; });
+        effectivePF = weightedSum / totalBaseDirectCost;
+      }
 
       const calW = ew;
       const timeCost = weeklyTimeCostRate * calW;
