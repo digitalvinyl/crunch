@@ -2319,6 +2319,11 @@ function HoursTab({ disciplines, setDisciplines, hoursData, setHoursData, baseWe
 // PDF Report Export — generates a print-optimized HTML report
 // ═══════════════════════════════════════════════════════════════════════
 function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, adjustedWeeks, calendarWeeks, startDate, otMode, disciplinePFs, hoursData, xerSchedule) {
+  try {
+  if (!forecast || !optimization) {
+    alert("Export unavailable — forecast data is still loading. Please wait a moment and try again.");
+    return;
+  }
   const baseEndDate = new Date(startDate);
   baseEndDate.setDate(baseEndDate.getDate() + baseWeeks * 7 - 1);
   // Use CPM effective weeks for accurate end date (logic links may prevent full compression)
@@ -2335,8 +2340,9 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
   const hasOverrides = disciplinePFs && Object.keys(disciplinePFs).length > 0;
 
   // Discipline rows
-  const discRows = disciplines.map((d) => {
-    const bd = forecast.weeklyDirectByDisc[d.id];
+  const discRows = (disciplines || []).map((d) => {
+    const bd = forecast.weeklyDirectByDisc && forecast.weeklyDirectByDisc[d.id];
+    if (!bd) return '';
     const delta = bd.adjCost - bd.baseCost;
     const hasOverride = disciplinePFs && disciplinePFs[d.id] !== undefined;
     return `<tr>
@@ -2346,12 +2352,12 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
       <td style="padding:6px 12px;border-bottom:1px solid #e0e2e8;text-align:right;color:${delta > 0 ? '#dc2626' : delta < 0 ? '#16a34a' : '#6b7280'}">
         ${delta === 0 ? "—" : (delta > 0 ? "+" : "-") + fmtCur(delta)}
       </td>
-      <td style="padding:6px 12px;border-bottom:1px solid #e0e2e8;text-align:center;font-weight:600;${hasOverride ? 'color:#7c3aed' : ''}">${bd.compressionPF.toFixed(3)}${hasOverride ? ' ★' : ''}</td>
+      <td style="padding:6px 12px;border-bottom:1px solid #e0e2e8;text-align:center;font-weight:600;${hasOverride ? 'color:#7c3aed' : ''}">${(bd.compressionPF || 1).toFixed(3)}${hasOverride ? ' ★' : ''}</td>
     </tr>`;
   }).join("");
 
   // Time-cost rows
-  const tcRows = timeCosts.map((t) => {
+  const tcRows = (timeCosts || []).map((t) => {
     const weeklyRate = t.basis === "weekly" ? t.rate : t.rate / 4.33;
     const base = weeklyRate * baseWeeks;
     const adj = weeklyRate * calendarWeeks;
@@ -2380,18 +2386,18 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
   }).join("");
 
   // PF additional degradation rows
-  const pfOverrideRows = hasOverrides ? disciplines.filter(d => disciplinePFs[d.id] !== undefined).map(d => {
+  const pfOverrideRows = hasOverrides ? (disciplines || []).filter(d => disciplinePFs[d.id] !== undefined).map(d => {
     const addlFactor = disciplinePFs[d.id];
-    const effectivePF = forecast.globalPF * addlFactor;
+    const effectivePF = (forecast.globalPF || 1) * addlFactor;
     return `<tr>
       <td style="padding:4px 12px;color:#6b7280">${d.name}</td>
       <td style="padding:4px 12px;font-weight:600;color:#7c3aed">×${addlFactor.toFixed(3)}</td>
-      <td style="padding:4px 12px;color:#6b7280">Effective PF: ${effectivePF.toFixed(3)} (model ${forecast.globalPF.toFixed(3)} × ${addlFactor.toFixed(3)})</td>
+      <td style="padding:4px 12px;color:#6b7280">Effective PF: ${effectivePF.toFixed(3)} (model ${(forecast.globalPF || 1).toFixed(3)} × ${addlFactor.toFixed(3)})</td>
     </tr>`;
   }).join("") : "";
 
   // Gantt summary rows (pre-sorted by finish date)
-  const ganttRows = forecast.ganttBars.map((bar) => {
+  const ganttRows = (forecast.ganttBars || []).map((bar) => {
     const colors = ["#3b82f6", "#22c55e", "#a78bfa", "#f43f5e", "#22d3ee", "#f59e0b", "#ec4899", "#84cc16"];
     const origIdx = disciplines.findIndex(d => d.id === bar.id);
     const getDate = (w) => { const d = new Date(startDate); d.setDate(d.getDate() + w * 7); return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }); };
@@ -2413,10 +2419,10 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
   const maxCompression = baseWeeks - currentMinWeeks;
   const currentCompression = Math.max(0, baseWeeks - adjustedWeeks);
   const currentCompressionPct = maxCompression > 0 ? Math.min(100, (currentCompression / maxCompression) * 100) : 0;
-  const currentPF = forecast.globalPF;
+  const currentPF = forecast.globalPF || 1.0;
   const currentOtWeeks = forecast.numOtWeeks || 0;
   const currentAvgFatigue = forecast.avgMCAAFatigue || 1.0;
-  const numActiveTrades = disciplines.filter(d => {
+  const numActiveTrades = (disciplines || []).filter(d => {
     const h = hoursData && hoursData[d.id];
     return h && h.some(v => v > 0);
   }).length;
@@ -3091,8 +3097,8 @@ ${forecast.waterfallData && forecast.waterfallData.length > 2 ? `
 <table class="params">
   <tr><td>Schedule Scenario</td><td>${scenarioType} (${weekOffset === 0 ? 'no change' : (weekOffset > 0 ? '+' : '') + weekOffset + ' weeks'})</td></tr>
   <tr><td>Overtime Mode</td><td>${otLabel}</td></tr>
-  ${forecast.numOtWeeks > 0 ? `<tr><td>OT Weeks Applied</td><td>${forecast.numOtWeeks} weeks (avg MCAA fatigue PI: ${forecast.avgMCAAFatigue.toFixed(3)})</td></tr>` : ''}
-  <tr><td>Acceleration PF (BRT)</td><td>${ACCEL_PF.toFixed(2)} (fixed — BRT/MCAA empirical${adjustedWeeks < baseWeeks ? ', effective: ' + forecast.globalPF.toFixed(3) : ''})</td></tr>
+  ${forecast.numOtWeeks > 0 ? `<tr><td>OT Weeks Applied</td><td>${forecast.numOtWeeks} weeks (avg MCAA fatigue PI: ${(forecast.avgMCAAFatigue || 1).toFixed(3)})</td></tr>` : ''}
+  <tr><td>Acceleration PF (BRT)</td><td>${ACCEL_PF.toFixed(2)} (fixed — BRT/MCAA empirical${adjustedWeeks < baseWeeks ? ', effective: ' + (forecast.globalPF || 1).toFixed(3) : ''})</td></tr>
   <tr><td>Extension PF</td><td>${EXTENSION_PF.toFixed(2)} (fixed — no gain per BRT data)</td></tr>
   <tr><td>PF Model</td><td>Non-linear power curve (BRT/MCAA, α=${PF_CURVE_ALPHA})</td></tr>
   <tr><td>Trade Stacking</td><td>MCAA Factor Model — incremental only (${STACKING_K * 100}%/trade beyond baseline stacking, capped at ${STACKING_MAX * 100}%)</td></tr>
@@ -3103,7 +3109,7 @@ ${forecast.waterfallData && forecast.waterfallData.length > 2 ? `
 
 ${hasOverrides ? `
 <h2>Discipline PF Adjustments</h2>
-<div class="note">The following disciplines have additional productivity degradation applied beyond the model PF of ${forecast.globalPF.toFixed(3)}. Adjusted values are marked with ★ in the discipline table.</div>
+<div class="note">The following disciplines have additional productivity degradation applied beyond the model PF of ${(forecast.globalPF || 1).toFixed(3)}. Adjusted values are marked with ★ in the discipline table.</div>
 <table class="params">${pfOverrideRows}</table>
 ` : ''}
 
@@ -3191,42 +3197,39 @@ ${cmbSvg}
 </div>
 </body></html>`;
 
-  // Create blob and print via iframe (most compatible with sandboxed environments)
-  const blob = new Blob([html], { type: "text/html" });
-  const url = URL.createObjectURL(blob);
-  
-  // Use hidden iframe approach — works in sandboxed artifact environments
+  // Use iframe with srcdoc — avoids cross-origin blob issues and popup blockers
   let iframe = document.getElementById("__pdf_print_frame");
   if (iframe) iframe.remove();
   iframe = document.createElement("iframe");
   iframe.id = "__pdf_print_frame";
-  iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:none;";
-  iframe.src = url;
+  iframe.style.cssText = "position:fixed;left:-9999px;top:0;width:800px;height:600px;border:none;";
+  iframe.srcdoc = html;
   document.body.appendChild(iframe);
-  
+
   iframe.onload = () => {
     try {
       iframe.contentWindow.focus();
       iframe.contentWindow.print();
     } catch (e) {
-      // Cross-origin restriction — try opening in new tab instead
-      const w = window.open(url, "_blank");
-      if (!w) {
-        // Popup also blocked — download the file
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "CRUNCH_Forecast_Report.html";
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-      }
+      // Fallback: open in new tab for manual print
+      const w = window.open("", "_blank");
+      if (w) { w.document.write(html); w.document.close(); }
     }
-    // Clean up after delay
-    setTimeout(() => { iframe.remove(); URL.revokeObjectURL(url); }, 120000);
+    // After print dialog closes (or immediately if print failed), remove iframe
+    // Use a longer timeout so the user can interact with the print dialog
+    setTimeout(() => {
+      if (document.getElementById("__pdf_print_frame")) {
+        document.getElementById("__pdf_print_frame").remove();
+      }
+    }, 1000);
   };
+  } catch (err) {
+    console.error("[CRUNCH Export] exportPDF error:", err);
+    alert("Export failed: " + err.message);
+  }
 }
 
-function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, weekOffset, setWeekOffset, otMode, disciplinePFs, exportRef, xerSchedule }) {
+function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, weekOffset, setWeekOffset, otMode, disciplinePFs, exportRef, pendingExport, xerSchedule }) {
   const COLORS = useColors();
   const styles = getStyles(COLORS);
   const [showByDiscipline, setShowByDiscipline] = useState(false);
@@ -3639,7 +3642,14 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
   // Register export function so App header can trigger it
   useEffect(() => {
     if (exportRef) {
-      exportRef.current = () => exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, adjustedWeeks, calendarWeeks, startDate, otMode, disciplinePFs, hoursData, xerSchedule);
+      exportRef.current = () => {
+        exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, adjustedWeeks, calendarWeeks, startDate, otMode, disciplinePFs, hoursData, xerSchedule);
+      };
+    }
+    // If a pending export was requested (e.g., clicked from another tab), fire it now
+    if (pendingExport && pendingExport.current) {
+      pendingExport.current = false;
+      setTimeout(() => { if (exportRef.current) exportRef.current(); }, 50);
     }
     return () => { if (exportRef) exportRef.current = null; };
   });
@@ -4030,7 +4040,7 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
           if (ticks[ticks.length - 1] !== maxWeek) ticks.push(maxWeek);
 
           const allRows = [
-            ...forecast.ganttBars.map((bar) => {
+            ...(forecast.ganttBars || []).map((bar) => {
               const origIdx = disciplines.findIndex(d => d.id === bar.id);
               return {
               type: "discipline",
@@ -6269,10 +6279,10 @@ function ModelsTab({ baseWeeks, hoursData, disciplines, xerSchedule }) {
   ACCEL_PF = ${ACCEL_PF} (fixed, BRT empirical max loss at full compression)`}
         </div>
         <ResponsiveContainer width="100%" height={280}>
-          <LineChart data={pfCurveData} margin={{ top: 8, right: 30, bottom: 20, left: 10 }}>
+          <LineChart data={pfCurveData} margin={{ top: 8, right: 30, bottom: 40, left: 10 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
             <XAxis dataKey="compression" stroke={COLORS.textMuted} tick={{ fontSize: 10 }}
-              label={{ value: "Compression %", position: "bottom", offset: 4, style: { fontSize: 11, fill: COLORS.textDim } }} />
+              label={{ value: "Compression %", position: "bottom", offset: 20, style: { fontSize: 11, fill: COLORS.textDim } }} />
             <YAxis stroke={COLORS.textMuted} tick={{ fontSize: 10 }} domain={[0.82, 1.01]}
               label={{ value: "Productivity Factor", angle: -90, position: "insideLeft", offset: 10, style: { fontSize: 11, fill: COLORS.textDim } }} />
             <Tooltip contentStyle={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 4, fontSize: 11 }} />
@@ -6281,7 +6291,7 @@ function ModelsTab({ baseWeeks, hoursData, disciplines, xerSchedule }) {
             <Line type="monotone" dataKey={`α${PF_CURVE_ALPHA}`} name={`α=${PF_CURVE_ALPHA} (Active)`} stroke={COLORS.accent} strokeWidth={2.5} dot={false} />
             <Line type="monotone" dataKey="α2.2" name="α=2.2" stroke={COLORS.purple || "#a78bfa"} strokeWidth={1.5} dot={false} />
             <Line type="monotone" dataKey="α2.6" name="α=2.6" stroke={COLORS.red} strokeWidth={1} strokeDasharray="4 4" dot={false} />
-            <Legend wrapperStyle={{ fontSize: 10, paddingTop: 8 }} />
+            <Legend wrapperStyle={{ fontSize: 10 }} />
           </LineChart>
         </ResponsiveContainer>
         <div style={refStyle}>Sources: BRT, "More Construction for the Money" (1983); Thomas, H.R., Horner, R.M.W., "Productivity Modeling" (1997); MCAA Bulletin OT1 Rev. (2011)</div>
@@ -6307,10 +6317,10 @@ PI sourced from MCAA Bulletin OT1 lookup tables:
 Beyond table range: linear extrapolation with floor of 0.35`}
         </div>
         <ResponsiveContainer width="100%" height={280}>
-          <LineChart data={mcaaData} margin={{ top: 8, right: 30, bottom: 20, left: 10 }}>
+          <LineChart data={mcaaData} margin={{ top: 8, right: 30, bottom: 40, left: 10 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
             <XAxis dataKey="week" stroke={COLORS.textMuted} tick={{ fontSize: 10 }}
-              label={{ value: "Consecutive OT Week", position: "bottom", offset: 4, style: { fontSize: 11, fill: COLORS.textDim } }} />
+              label={{ value: "Consecutive OT Week", position: "bottom", offset: 20, style: { fontSize: 11, fill: COLORS.textDim } }} />
             <YAxis stroke={COLORS.textMuted} tick={{ fontSize: 10 }} domain={[0.3, 1.05]}
               label={{ value: "Productivity Index (PI)", angle: -90, position: "insideLeft", offset: 10, style: { fontSize: 11, fill: COLORS.textDim } }} />
             <Tooltip contentStyle={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 4, fontSize: 11 }} />
@@ -6318,7 +6328,7 @@ Beyond table range: linear extrapolation with floor of 0.35`}
             <ReferenceLine y={0.7} stroke={COLORS.red} strokeDasharray="3 3" label={{ value: "Severe", position: "right", fontSize: 9, fill: COLORS.red }} />
             <Line type="monotone" dataKey="50 hr/wk (Sat OT)" stroke={COLORS.orange} strokeWidth={2.5} dot={{ r: 2.5, fill: COLORS.orange }} />
             <Line type="monotone" dataKey="60 hr/wk (Sat+Sun OT)" stroke={COLORS.red} strokeWidth={2.5} dot={{ r: 2.5, fill: COLORS.red }} />
-            <Legend wrapperStyle={{ fontSize: 10, paddingTop: 8 }} />
+            <Legend wrapperStyle={{ fontSize: 10 }} />
           </LineChart>
         </ResponsiveContainer>
         <div style={refStyle}>Sources: Hanna, A.S., Sullivan, K.T., Lackney, J.A. (2004); Hanna, Taylor, Sullivan (2005) ASCE JCEM; BRT (1980); NECA (1989); Thomas/Penn State (1997); US Army COE (1979)</div>
@@ -6346,10 +6356,10 @@ Net Penalty(w) = max(0, Raw(w) - baselineAvgPenalty)
   activeTrades = disciplines with hours > 0 in week w`}
         </div>
         <ResponsiveContainer width="100%" height={260}>
-          <BarChart data={stackingData} margin={{ top: 8, right: 30, bottom: 20, left: 10 }}>
+          <BarChart data={stackingData} margin={{ top: 8, right: 30, bottom: 40, left: 10 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
             <XAxis dataKey="trades" stroke={COLORS.textMuted} tick={{ fontSize: 10 }}
-              label={{ value: "Concurrent Trades", position: "bottom", offset: 4, style: { fontSize: 11, fill: COLORS.textDim } }} />
+              label={{ value: "Concurrent Trades", position: "bottom", offset: 20, style: { fontSize: 11, fill: COLORS.textDim } }} />
             <YAxis stroke={COLORS.textMuted} tick={{ fontSize: 10 }} unit="%"
               label={{ value: "Stacking Penalty %", angle: -90, position: "insideLeft", offset: 10, style: { fontSize: 11, fill: COLORS.textDim } }} />
             <Tooltip contentStyle={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 4, fontSize: 11 }} formatter={(v) => `${v}%`} />
@@ -6357,7 +6367,7 @@ Net Penalty(w) = max(0, Raw(w) - baselineAvgPenalty)
             <Bar dataKey="d1" name="Density 1.0×" fill={COLORS.accent} opacity={0.7} radius={[2,2,0,0]} />
             <Bar dataKey="d1.5" name="Density 1.5×" fill={COLORS.orange} opacity={0.8} radius={[2,2,0,0]} />
             <Bar dataKey="d2" name="Density 2.0×" fill={COLORS.red} opacity={0.9} radius={[2,2,0,0]} />
-            <Legend wrapperStyle={{ fontSize: 10, paddingTop: 8 }} />
+            <Legend wrapperStyle={{ fontSize: 10 }} />
             <ReferenceLine y={STACKING_MAX * 100} stroke={COLORS.red} strokeDasharray="5 5" label={{ value: `Cap ${STACKING_MAX * 100}%`, position: "right", fontSize: 9, fill: COLORS.red }} />
           </BarChart>
         </ResponsiveContainer>
@@ -6384,10 +6394,10 @@ Blended Rate = (50 × baseRate + otHrs × otRate) / totalHrsPerWeek
 OT weeks placed at: weeks [targetWeeks - numOtWeeks] through [targetWeeks - 1]`}
         </div>
         <ResponsiveContainer width="100%" height={280}>
-          <ComposedChart data={otProgressiveData} margin={{ top: 8, right: 40, bottom: 20, left: 10 }}>
+          <ComposedChart data={otProgressiveData} margin={{ top: 8, right: 40, bottom: 40, left: 10 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
             <XAxis dataKey="duration" stroke={COLORS.textMuted} tick={{ fontSize: 10 }} reversed
-              label={{ value: "Project Duration (weeks)", position: "bottom", offset: 4, style: { fontSize: 11, fill: COLORS.textDim } }} />
+              label={{ value: "Project Duration (weeks)", position: "bottom", offset: 20, style: { fontSize: 11, fill: COLORS.textDim } }} />
             <YAxis yAxisId="weeks" stroke={COLORS.textMuted} tick={{ fontSize: 10 }}
               label={{ value: "OT Weeks Required", angle: -90, position: "insideLeft", offset: 10, style: { fontSize: 11, fill: COLORS.textDim } }} />
             <YAxis yAxisId="pct" orientation="right" stroke={COLORS.textMuted} tick={{ fontSize: 10 }} unit="%"
@@ -6397,7 +6407,7 @@ OT weeks placed at: weeks [targetWeeks - numOtWeeks] through [targetWeeks - 1]`}
             <Bar yAxisId="weeks" dataKey="Sat+Sun OT Weeks" fill={COLORS.red} opacity={0.5} radius={[2,2,0,0]} />
             <Line yAxisId="pct" type="monotone" dataKey="Sat Utilization" name="Sat OT %" stroke={COLORS.orange} strokeWidth={2} dot={false} />
             <Line yAxisId="pct" type="monotone" dataKey="SatSun Utilization" name="Sat+Sun OT %" stroke={COLORS.red} strokeWidth={2} dot={false} />
-            <Legend wrapperStyle={{ fontSize: 10, paddingTop: 8 }} />
+            <Legend wrapperStyle={{ fontSize: 10 }} />
           </ComposedChart>
         </ResponsiveContainer>
       </div>
@@ -6421,7 +6431,7 @@ Scaled Fatigue  = 1 - (1 - PI) × fatigueScale
 Scaled Stacking = stackPenalty × stackScale`}
         </div>
         <ResponsiveContainer width="100%" height={220}>
-          <BarChart data={riskChartData} margin={{ top: 8, right: 30, bottom: 20, left: 10 }}>
+          <BarChart data={riskChartData} margin={{ top: 8, right: 30, bottom: 40, left: 10 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
             <XAxis dataKey="factor" stroke={COLORS.textMuted} tick={{ fontSize: 10 }} />
             <YAxis stroke={COLORS.textMuted} tick={{ fontSize: 10 }} domain={[0.8, 1.6]} />
@@ -6429,7 +6439,7 @@ Scaled Stacking = stackPenalty × stackScale`}
             <Bar dataKey="P50" name="P50 (Expected)" fill={COLORS.green} opacity={0.7} radius={[2,2,0,0]} />
             <Bar dataKey="P80" name="P80" fill={COLORS.orange} opacity={0.7} radius={[2,2,0,0]} />
             <Bar dataKey="P90" name="P90" fill={COLORS.red} opacity={0.7} radius={[2,2,0,0]} />
-            <Legend wrapperStyle={{ fontSize: 10, paddingTop: 8 }} />
+            <Legend wrapperStyle={{ fontSize: 10 }} />
           </BarChart>
         </ResponsiveContainer>
         <div style={refStyle}>Source: AACE International Recommended Practice 42R-08, "Risk Analysis and Contingency Determination" (2011)</div>
@@ -6459,17 +6469,17 @@ Total hours are conserved (Σ remains constant).`}
         </div>
         {redistributionData.length > 0 && (
           <ResponsiveContainer width="100%" height={260}>
-            <AreaChart data={redistributionData} margin={{ top: 8, right: 30, bottom: 20, left: 10 }}>
+            <AreaChart data={redistributionData} margin={{ top: 8, right: 30, bottom: 40, left: 10 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
               <XAxis dataKey="week" stroke={COLORS.textMuted} tick={{ fontSize: 10 }}
-                label={{ value: "Week", position: "bottom", offset: 4, style: { fontSize: 11, fill: COLORS.textDim } }} />
+                label={{ value: "Week", position: "bottom", offset: 20, style: { fontSize: 11, fill: COLORS.textDim } }} />
               <YAxis stroke={COLORS.textMuted} tick={{ fontSize: 10 }}
                 label={{ value: "Hours", angle: -90, position: "insideLeft", offset: 10, style: { fontSize: 11, fill: COLORS.textDim } }} />
               <Tooltip contentStyle={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 4, fontSize: 11 }} />
               <Area type="monotone" dataKey="Baseline" stroke={COLORS.textMuted} fill={COLORS.textMuted} fillOpacity={0.15} strokeWidth={2} />
               <Area type="monotone" dataKey="Compressed (75%)" stroke={COLORS.red} fill={COLORS.red} fillOpacity={0.12} strokeWidth={2} strokeDasharray="4 4" />
               <Area type="monotone" dataKey="Extended (125%)" stroke={COLORS.green} fill={COLORS.green} fillOpacity={0.12} strokeWidth={2} strokeDasharray="4 4" />
-              <Legend wrapperStyle={{ fontSize: 10, paddingTop: 8 }} />
+              <Legend wrapperStyle={{ fontSize: 10 }} />
             </AreaChart>
           </ResponsiveContainer>
         )}
@@ -6495,10 +6505,10 @@ Total hours are conserved (Σ remains constant).`}
 All multipliers are ≥ 1.0, so the combined effect is always ≥ base cost.`}
         </div>
         <ResponsiveContainer width="100%" height={280}>
-          <LineChart data={cascadeData} margin={{ top: 8, right: 30, bottom: 20, left: 10 }}>
+          <LineChart data={cascadeData} margin={{ top: 8, right: 30, bottom: 40, left: 10 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
             <XAxis dataKey="compression" stroke={COLORS.textMuted} tick={{ fontSize: 10 }}
-              label={{ value: "Compression Level", position: "bottom", offset: 4, style: { fontSize: 11, fill: COLORS.textDim } }} />
+              label={{ value: "Compression Level", position: "bottom", offset: 20, style: { fontSize: 11, fill: COLORS.textDim } }} />
             <YAxis stroke={COLORS.textMuted} tick={{ fontSize: 10 }} domain={[0.9, "auto"]}
               label={{ value: "Cost Multiplier", angle: -90, position: "insideLeft", offset: 10, style: { fontSize: 11, fill: COLORS.textDim } }} />
             <Tooltip contentStyle={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 4, fontSize: 11 }} formatter={(v) => `${v}×`} />
@@ -6507,7 +6517,7 @@ All multipliers are ≥ 1.0, so the combined effect is always ≥ base cost.`}
             <Line type="monotone" dataKey="Fatigue Multiplier" stroke={COLORS.orange} strokeWidth={2} dot={{ r: 3 }} />
             <Line type="monotone" dataKey="Stacking Multiplier" stroke={COLORS.purple || "#a78bfa"} strokeWidth={2} dot={{ r: 3 }} />
             <Line type="monotone" dataKey="Combined" stroke={COLORS.red} strokeWidth={3} dot={{ r: 4, fill: COLORS.red }} />
-            <Legend wrapperStyle={{ fontSize: 10, paddingTop: 8 }} />
+            <Legend wrapperStyle={{ fontSize: 10 }} />
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -6629,6 +6639,7 @@ function CostForecastApp() {
   const [sliderSticky, setSliderSticky] = useState(false);
   const sliderSentinelRef = useRef(null);
   const exportRef = useRef(null);
+  const pendingExport = useRef(false);
 
   useEffect(() => {
     const el = sliderSentinelRef.current;
@@ -6797,8 +6808,6 @@ function CostForecastApp() {
             </div>
             <div className="sidebar-brand-text">
               <div style={{ fontFamily: DISPLAY_FONT, fontSize: 22, fontWeight: 700, letterSpacing: "3px", textTransform: "uppercase", color: COLORS.text, lineHeight: 1.1 }}>CRUNCH</div>
-              <div style={{ fontFamily: FONT, fontSize: 9, color: COLORS.textMuted, letterSpacing: "0.3px", lineHeight: 1.3 }}>Cost Risk Under Networked</div>
-              <div style={{ fontFamily: FONT, fontSize: 9, color: COLORS.textMuted, letterSpacing: "0.3px", lineHeight: 1.1 }}>Compression Heuristics</div>
             </div>
           </div>
         </div>
@@ -6837,15 +6846,28 @@ function CostForecastApp() {
         <div style={styles.header}>
         <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
           <button
-            onClick={() => { if (exportRef.current) exportRef.current(); }}
-            disabled={activeTab !== "forecast"}
+            onClick={() => {
+              if (activeTab !== "forecast") {
+                pendingExport.current = true;
+                setActiveTab("forecast");
+                return;
+              }
+              if (exportRef.current) {
+                exportRef.current();
+              } else {
+                // Ref not yet set — retry after React render cycle
+                setTimeout(() => {
+                  if (exportRef.current) exportRef.current();
+                }, 200);
+              }
+            }}
             aria-label="Export CRUNCH report"
             style={{
               background: "transparent",
               border: `1px solid ${COLORS.border}`,
               borderRadius: 4,
               padding: "6px 14px",
-              cursor: activeTab === "forecast" ? "pointer" : "default",
+              cursor: "pointer",
               fontSize: 12,
               fontFamily: FONT,
               fontWeight: 500,
@@ -6853,10 +6875,8 @@ function CostForecastApp() {
               display: "flex",
               alignItems: "center",
               gap: 6,
-              opacity: activeTab === "forecast" ? 1 : 0.35,
-              transition: "opacity 0.15s",
             }}
-            title={activeTab !== "forecast" ? "Switch to EAC Forecast tab to enable export" : "Export CRUNCH report"}
+            title="Export CRUNCH report"
           >
             <span style={{ fontSize: 14 }}>⎙</span> Export Report
           </button>
@@ -7079,7 +7099,7 @@ function CostForecastApp() {
         {activeTab === "hours" && <HoursTab disciplines={disciplines} setDisciplines={setDisciplines} hoursData={hoursData} setHoursData={setHoursData} baseWeeks={baseWeeks} setBaseWeeks={setBaseWeeks} startDate={startDate} setStartDate={setStartDate} setWeekOffset={setWeekOffset} setDisciplinePFs={setDisciplinePFs} xerSchedule={xerSchedule} setXerSchedule={setXerSchedule} />}
         {activeTab === "data" && <DataTab disciplines={disciplines} hoursData={hoursData} timeCosts={timeCosts} timeCostData={timeCostData} baseWeeks={baseWeeks} startDate={startDate} />}
         {activeTab === "adjustments" && <AdjustmentsTab disciplines={disciplines} hoursData={hoursData} timeCosts={timeCosts} timeCostData={timeCostData} baseWeeks={baseWeeks} startDate={startDate} weekOffset={weekOffset} otMode={otMode} disciplinePFs={disciplinePFs} setDisciplinePFs={setDisciplinePFs} xerSchedule={xerSchedule} />}
-        {activeTab === "forecast" && <ForecastTab disciplines={disciplines} hoursData={hoursData} timeCosts={timeCosts} baseWeeks={baseWeeks} startDate={startDate} weekOffset={weekOffset} setWeekOffset={setWeekOffset} otMode={otMode} disciplinePFs={disciplinePFs} exportRef={exportRef} xerSchedule={xerSchedule} />}
+        {activeTab === "forecast" && <ForecastTab disciplines={disciplines} hoursData={hoursData} timeCosts={timeCosts} baseWeeks={baseWeeks} startDate={startDate} weekOffset={weekOffset} setWeekOffset={setWeekOffset} otMode={otMode} disciplinePFs={disciplinePFs} exportRef={exportRef} pendingExport={pendingExport} xerSchedule={xerSchedule} />}
         {activeTab === "models" && <ModelsTab baseWeeks={baseWeeks} hoursData={hoursData} disciplines={disciplines} xerSchedule={xerSchedule} />}
       </div>
       </div>{/* end mainContent */}
