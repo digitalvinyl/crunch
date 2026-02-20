@@ -732,11 +732,20 @@ function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
     runForwardPass(sorted, taskMap, predecessors);
   } else {
     // ═══════════════════════════════════════════════════════════════════
-    // Float-Aware Schedule Crashing
-    // Phase 1: CPM at original durations → compute dynamic float
-    // Phase 2: Crash only tasks whose float < required compression
-    // Phase 3: Forward pass with crashed durations
-    // Phase 4: Iterative refinement for newly-critical paths
+    // Float-Aware Iterative Schedule Crashing
+    //
+    // Proper CPM crashing: repeatedly identify the critical path, then
+    // distribute a small increment of compression proportionally across
+    // critical tasks that have remaining OT capacity. Non-critical tasks
+    // (those with float ≥ the compression achieved so far) are never
+    // touched. This avoids over-compressing any single task or path.
+    //
+    // Phase 1: Full CPM (forward + backward) at original durations
+    //          → establishes baseline critical path and dynamic float
+    // Phase 2: Iterative 1-day crashing loop
+    //          → each iteration: identify critical tasks, distribute
+    //            1 day of compression proportionally, re-run CPM
+    // Phase 3: Final CPM for accurate post-compression float values
     // ═══════════════════════════════════════════════════════════════════
 
     // ── Phase 1: CPM at original durations to compute dynamic float ──
@@ -750,53 +759,71 @@ function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
       // No compression needed — already at or under target
       // Leave original durations, forward pass already done
     } else {
-      // ── Phase 2: Float-aware crash assignment ──
-      // Only compress tasks whose float cannot absorb the required compression.
-      // requiredCrash = max(0, totalProjectCompression - totalFloat)
-      // Tasks with float ≥ totalProjectCompression are NOT compressed at all.
-      Object.values(taskMap).forEach(t => {
-        const maxCrash = t.origDays - Math.max(1, Math.ceil(t.origDays * otFloor));
-        const requiredCrash = Math.max(0, totalProjectCompression - t.totalFloat);
-        const crashAmount = Math.min(requiredCrash, maxCrash);
-        t.newDays = t.origDays - crashAmount;
-      });
+      // ── Phase 2: Iterative critical-path crashing ──
+      // Each iteration shaves 1 day off the project end by distributing
+      // compression proportionally among critical tasks. This mirrors
+      // standard CPM crash methodology: crash the critical path, re-run
+      // CPM, repeat. We batch by 1-day increments for efficiency.
+      //
+      // Cap iterations to prevent infinite loops on degenerate schedules.
+      const MAX_CRASH_ITERATIONS = Math.min(totalProjectCompression + 10, 500);
 
-      // ── Phase 3: Forward pass with crashed durations ──
-      runForwardPass(sorted, taskMap, predecessors);
-
-      // ── Phase 4: Iterative refinement ──
-      // If CPM produces a longer schedule than target (because the initial
-      // float-based estimate is approximate for complex networks), identify
-      // newly-critical tasks and compress them further.
-      const MAX_ITERATIONS = 5;
-      for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
+      for (let iter = 0; iter < MAX_CRASH_ITERATIONS; iter++) {
+        // Check current project end
         const projEnd = Math.max(...Object.values(taskMap).map(t => t.earlyFinish));
-        if (projEnd <= totalTargetDays) break;
+        if (projEnd <= totalTargetDays) break; // target reached
 
-        // Backward pass to find current critical path
+        // Run backward pass to identify current critical path
         runBackwardPass(sorted, taskMap, successors);
 
-        const overshoot = projEnd - totalTargetDays;
-        let compressed = false;
-
-        // Compress critical tasks (float ≤ 0) that have remaining capacity
+        // Collect critical tasks (float ≤ 0) that still have crash capacity
+        const crashable = [];
+        let totalCrashCapacity = 0;
         Object.values(taskMap).forEach(t => {
-          if (t.totalFloat > 0) return; // not on critical path
+          if (t.totalFloat > 0) return; // not critical — skip
           const minDays = Math.max(1, Math.ceil(t.origDays * otFloor));
-          if (t.newDays <= minDays) return; // already at compression floor
-          const additionalCrash = Math.min(t.newDays - minDays, overshoot);
-          if (additionalCrash > 0) {
-            t.newDays -= additionalCrash;
-            compressed = true;
+          const remaining = t.newDays - minDays;
+          if (remaining > 0) {
+            crashable.push({ task: t, remaining, minDays });
+            totalCrashCapacity += remaining;
           }
         });
 
-        if (!compressed) break; // no further compression possible
+        if (crashable.length === 0 || totalCrashCapacity === 0) break; // floor reached
+
+        // How many project days do we still need to shave off?
+        const overshoot = projEnd - totalTargetDays;
+
+        // Distribute crash proportionally by each task's remaining capacity.
+        // We crash by exactly 1 day per task (minimum meaningful increment)
+        // to avoid over-shooting. For efficiency, when overshoot is large
+        // relative to the number of crashable tasks, we can safely crash
+        // each task by more than 1 day — but never more than proportional share.
+        //
+        // crashPerTask = max(1, round(task.remaining / totalCapacity * overshoot))
+        // This ensures we don't overshoot on any single task while making
+        // meaningful progress toward the target.
+        let anyCompressed = false;
+        crashable.forEach(({ task, remaining }) => {
+          // Proportional share of the needed compression
+          const proportionalShare = Math.round((remaining / totalCrashCapacity) * overshoot);
+          // Crash by at least 1 day, at most the proportional share, at most remaining capacity
+          const crash = Math.max(1, Math.min(proportionalShare, remaining));
+          if (crash > 0) {
+            task.newDays -= crash;
+            anyCompressed = true;
+          }
+        });
+
+        if (!anyCompressed) break;
+
+        // Re-run forward pass with updated durations to see the new project end
         runForwardPass(sorted, taskMap, predecessors);
       }
     }
 
-    // Final backward pass for accurate post-compression float & criticality
+    // ── Phase 3: Final full CPM for accurate post-compression float & criticality ──
+    runForwardPass(sorted, taskMap, predecessors);
     runBackwardPass(sorted, taskMap, successors);
   }
 
@@ -2244,8 +2271,10 @@ function HoursTab({ disciplines, setDisciplines, hoursData, setHoursData, baseWe
 function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, adjustedWeeks, calendarWeeks, startDate, otMode, disciplinePFs, hoursData, xerSchedule) {
   const baseEndDate = new Date(startDate);
   baseEndDate.setDate(baseEndDate.getDate() + baseWeeks * 7 - 1);
+  // Use CPM effective weeks for accurate end date (logic links may prevent full compression)
+  const effectiveWeeks = forecast.effectiveWeeks || calendarWeeks;
   const adjEndDate = new Date(startDate);
-  adjEndDate.setDate(adjEndDate.getDate() + Math.round(calendarWeeks * 7) - 1);
+  adjEndDate.setDate(adjEndDate.getDate() + Math.round(effectiveWeeks * 7) - 1);
   const fmtDate = (d) => d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   const fmtCur = (v) => "$" + Math.round(Math.abs(v)).toLocaleString();
   const deltaEAC = forecast.adjTotalEAC - forecast.baseTotalEAC;
@@ -3168,8 +3197,6 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
 
   const baseEndDate = new Date(startDate);
   baseEndDate.setDate(baseEndDate.getDate() + baseWeeks * 7 - 1); snapToSunday(baseEndDate);
-  const adjustedEndDate = new Date(startDate);
-  adjustedEndDate.setDate(adjustedEndDate.getDate() + Math.round(calendarWeeks * 7) - 1); snapToSunday(adjustedEndDate);
 
   const forecast = useMemo(() => {
     const weeklyDirectByDisc = {};
@@ -3419,6 +3446,10 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
       effectiveWeeks,
     };
   }, [disciplines, hoursData, timeCosts, baseWeeks, adjustedWeeks, startDate, maxCompression, maxExtension, otMode, disciplinePFs, xerSchedule]);
+
+  // End date uses CPM effective weeks (which may differ from slider target due to logic links)
+  const adjustedEndDate = new Date(startDate);
+  adjustedEndDate.setDate(adjustedEndDate.getDate() + Math.round(forecast.effectiveWeeks * 7) - 1); snapToSunday(adjustedEndDate);
 
   const deltaEAC = forecast.adjTotalEAC - forecast.baseTotalEAC;
   const deltaPct = forecast.baseTotalEAC > 0 ? (deltaEAC / forecast.baseTotalEAC) * 100 : 0;
@@ -4397,7 +4428,7 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
                 const baseDur = Math.round(r.baseEndDay - r.baseStartDay);
                 const adjDur = Math.round(r.adjEndDay - r.adjStartDay);
                 const finishImprove = Math.round(r.baseEndDay - r.adjEndDay);
-                const inOt = otMode !== "none" && r.isCompressed;
+                const inOt = otMode !== "none" && otStartDay >= 0 && r.adjEndDay > otStartDay;
                 const startShiftD = Math.round(r.baseStartDay - r.adjStartDay);
                 const durCompD = Math.max(0, baseDur - adjDur);
                 return (
@@ -4446,7 +4477,7 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
                     )}
                     {inOt && (
                       <div style={{ color: COLORS.orange, fontWeight: 600, marginTop: 4, fontSize: 10 }}>
-                        OT: {otMode === "sat" ? "6-day week (Sat)" : "7-day week (Sat+Sun)"} · {durCompD}d saved via extra work days
+                        OT: {otMode === "sat" ? "6-day week (Sat)" : "7-day week (Sat+Sun)"}{durCompD > 0 ? ` · ${durCompD}d saved via extra work days` : " · In OT zone"}
                       </div>
                     )}
                     {r.totalFloat !== undefined && (
@@ -4557,8 +4588,8 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
                 const finishDelta = Math.round(row.baseEndDay - row.adjEndDay);
                 const startDelta = Math.round(row.baseStartDay - row.adjStartDay);
                 const durationDelta = baseDur - adjDur;
-                const taskUsesOt = otMode !== "none" && row.isCompressed;
-                const inOtZone = otStartDay >= 0 && row.adjEndDay > otStartDay;
+                const inOtZone = otStartDay >= 0 && row.adjEndDay > otStartDay && row.adjStartDay < maxDay;
+                const taskUsesOt = otMode !== "none" && inOtZone;
 
                 // Bar vertical layout: adjusted bar upper, baseline bar lower
                 const adjBarTop = 3;
@@ -5467,6 +5498,7 @@ function AdjustmentsTab({ disciplines, hoursData, timeCosts, timeCostData, baseW
       totalOrigEAC: totalOrigDirect + totalOrigTime,
       totalAdjEAC: totalAdjDirect + totalAdjTime,
       deltaEAC: (totalAdjDirect + totalAdjTime) - (totalOrigDirect + totalOrigTime),
+      effectiveWeeks,
     };
   }, [disciplines, hoursData, timeCosts, timeCostData, baseWeeks, adjustedWeeks, maxCompression, maxExtension, maxW, otMode, disciplinePFs, xerSchedule]);
 
@@ -5496,8 +5528,9 @@ function AdjustmentsTab({ disciplines, hoursData, timeCosts, timeCostData, baseW
   };
 
   const calendarWeeks = adjustedWeeks;
+  // Use CPM effective weeks for the displayed end date (may differ from slider target)
   const adjustedEndDate = new Date(startDate);
-  adjustedEndDate.setDate(adjustedEndDate.getDate() + Math.round(calendarWeeks * 7) - 1); snapToSunday(adjustedEndDate);
+  adjustedEndDate.setDate(adjustedEndDate.getDate() + Math.round((adjustments.effectiveWeeks || calendarWeeks) * 7) - 1); snapToSunday(adjustedEndDate);
   const baseEndDate = new Date(startDate);
   baseEndDate.setDate(baseEndDate.getDate() + baseWeeks * 7 - 1); snapToSunday(baseEndDate);
 
@@ -6514,8 +6547,17 @@ function CostForecastApp() {
 
   const baseEndDate = new Date(startDate);
   baseEndDate.setDate(baseEndDate.getDate() + baseWeeks * 7 - 1); snapToSunday(baseEndDate);
+  // Compute CPM effective weeks for the sidebar end date display
+  const sidebarEffectiveWeeks = useMemo(() => {
+    const hasCPM = xerSchedule && xerSchedule.activities && xerSchedule.activities.length > 0;
+    if (hasCPM && adjustedWeeks !== baseWeeks) {
+      const cpm = compressByCPM(xerSchedule, adjustedWeeks, baseWeeks, otMode);
+      return cpm ? cpm.achievedWeeks : adjustedWeeks;
+    }
+    return adjustedWeeks;
+  }, [xerSchedule, adjustedWeeks, baseWeeks, otMode]);
   const adjustedEndDate = new Date(startDate);
-  adjustedEndDate.setDate(adjustedEndDate.getDate() + Math.round(calendarWeeks * 7) - 1); snapToSunday(adjustedEndDate);
+  adjustedEndDate.setDate(adjustedEndDate.getDate() + Math.round(sidebarEffectiveWeeks * 7) - 1); snapToSunday(adjustedEndDate);
 
   // Per-week time-based cost data, keyed by timeCost id
   // Default: flat weekly rate derived from setup for every week
