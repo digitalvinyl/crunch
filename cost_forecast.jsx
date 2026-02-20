@@ -2324,6 +2324,7 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
     alert("Export unavailable — forecast data is still loading. Please wait a moment and try again.");
     return;
   }
+
   const baseEndDate = new Date(startDate);
   baseEndDate.setDate(baseEndDate.getDate() + baseWeeks * 7 - 1);
   // Use CPM effective weeks for accurate end date (logic links may prevent full compression)
@@ -2338,6 +2339,7 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
   const scenarioType = adjustedWeeks < baseWeeks ? "Accelerated" : adjustedWeeks > baseWeeks ? "Extended" : "Baseline";
   const otLabel = otMode === "none" ? "None" : otMode === "sat" ? "Saturday OT (60 hrs/wk)" : "Sat + Sun OT (70 hrs/wk)";
   const hasOverrides = disciplinePFs && Object.keys(disciplinePFs).length > 0;
+
 
   // Discipline rows
   const discRows = (disciplines || []).map((d) => {
@@ -2356,6 +2358,7 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
     </tr>`;
   }).join("");
 
+
   // Time-cost rows
   const tcRows = (timeCosts || []).map((t) => {
     const weeklyRate = t.basis === "weekly" ? t.rate : t.rate / 4.33;
@@ -2373,6 +2376,7 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
     </tr>`;
   }).join("");
 
+
   // Waterfall rows
   const wfRows = (forecast.waterfallData || []).map((item) => {
     const color = item.type === "total" ? "#1e40af" : item.value >= 0 ? "#dc2626" : "#16a34a";
@@ -2386,6 +2390,7 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
   }).join("");
 
   // PF additional degradation rows
+
   const pfOverrideRows = hasOverrides ? (disciplines || []).filter(d => disciplinePFs[d.id] !== undefined).map(d => {
     const addlFactor = disciplinePFs[d.id];
     const effectivePF = (forecast.globalPF || 1) * addlFactor;
@@ -2395,6 +2400,7 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
       <td style="padding:4px 12px;color:#6b7280">Effective PF: ${effectivePF.toFixed(3)} (model ${(forecast.globalPF || 1).toFixed(3)} × ${addlFactor.toFixed(3)})</td>
     </tr>`;
   }).join("") : "";
+
 
   // Gantt summary rows (pre-sorted by finish date)
   const ganttRows = (forecast.ganttBars || []).map((bar) => {
@@ -2408,6 +2414,7 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
       <td style="padding:5px 12px;border-bottom:1px solid #e0e2e8;text-align:right">${fmtCur(bar.adjCost)}</td>
     </tr>`;
   }).join("");
+
 
   // ── Pre-compute model appendix: SVG charts + tables ──
   const CW = 700, CH = 220, PAD = { t: 16, r: 20, b: 32, l: 50 };
@@ -2472,6 +2479,7 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
     }).join('');
   }
 
+
   // ── 1. PF Power Curve SVG ──
   const pfYMin = 0.82, pfYMax = 1.01;
   const pfXTicks = [0,20,40,60,80,100].map(v => [v, v + '%']);
@@ -2504,9 +2512,10 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
   pfSvg += svgLegend(pfCurves.map(c => ({ color: c.color, width: c.width, dash: c.dash, label: c.label })), CH + 8);
   pfSvg += '</svg>';
 
+
   // ── 2. MCAA Fatigue SVG ──
-  const mcaa50Cells = MCAA_PI[50].map(v => `<td style="padding:2px 4px;border-bottom:1px solid #e0e2e8;text-align:center;font-size:10px;color:${v < 0.8 ? '#dc2626' : v < 0.9 ? '#d97706' : '#374151'}">${v.toFixed(2)}</td>`).join("");
   const mcaa60Cells = MCAA_PI[60].map(v => `<td style="padding:2px 4px;border-bottom:1px solid #e0e2e8;text-align:center;font-size:10px;color:${v < 0.8 ? '#dc2626' : v < 0.9 ? '#d97706' : '#374151'}">${v.toFixed(2)}</td>`).join("");
+  const mcaa70Cells = MCAA_PI[70].map(v => `<td style="padding:2px 4px;border-bottom:1px solid #e0e2e8;text-align:center;font-size:10px;color:${v < 0.8 ? '#dc2626' : v < 0.9 ? '#d97706' : '#374151'}">${v.toFixed(2)}</td>`).join("");
   const mcaaHeaders = Array.from({length:17}, (_,i) => `<th style="text-align:center;font-size:9px">${i}</th>`).join("");
   const mcaaYMin = 0.3, mcaaYMax = 1.05;
   const mcaaXTicks = [0,4,8,12,16,20].map(v => [v, v.toString()]);
@@ -2517,13 +2526,13 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
   mcaaSvg += `<line x1="${PAD.l}" y1="${toY(0.7, mcaaYMin, mcaaYMax)}" x2="${CW - PAD.r}" y2="${toY(0.7, mcaaYMin, mcaaYMax)}" stroke="#dc2626" stroke-width="0.8" stroke-dasharray="4 3"/>`;
   mcaaSvg += `<text x="${CW - PAD.r - 2}" y="${toY(0.7, mcaaYMin, mcaaYMax) - 4}" text-anchor="end" font-size="8" fill="#dc2626">Severe</text>`;
   const mcaaSeries = [
-    { data: MCAA_PI[50], color: '#d97706', label: '50 hr/wk (Sat OT)' },
-    { data: MCAA_PI[60], color: '#dc2626', label: '60 hr/wk (Sat+Sun OT)' },
+    { data: MCAA_PI[60], color: '#d97706', label: '60 hr/wk (Sat OT)', mode: 'sat' },
+    { data: MCAA_PI[70], color: '#dc2626', label: '70 hr/wk (Sat+Sun OT)', mode: 'satSun' },
   ];
   mcaaSeries.forEach(s => {
     const pts = [];
     for (let w = 0; w <= 20; w++) {
-      pts.push([toX(w, 20), toY(getMCAAFatigue(w <= 16 ? (s.data === MCAA_PI[50] ? "sat" : "satSun") : (s.data === MCAA_PI[50] ? "sat" : "satSun"), w), mcaaYMin, mcaaYMax)]);
+      pts.push([toX(w, 20), toY(getMCAAFatigue(s.mode, w), mcaaYMin, mcaaYMax)]);
     }
     mcaaSvg += svgLine(pts, s.color, 2.2, '');
     pts.forEach(p => { mcaaSvg += `<circle cx="${p[0]}" cy="${p[1]}" r="2.5" fill="${s.color}"/>`; });
@@ -2543,6 +2552,7 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
   }
   mcaaSvg += svgLegend(mcaaSeries.map(s => ({ color: s.color, width: 2.2, label: s.label })), CH + 8);
   mcaaSvg += '</svg>';
+
 
   // ── 3. Trade Stacking SVG (bar chart) ──
   const stkMaxY = 28;
@@ -2580,6 +2590,7 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
   }
   stkSvg += svgLegend(stkDensities.map(s => ({ color: s.color, width: 8, label: s.label })), CH + 8);
   stkSvg += '</svg>';
+
 
   // ── 4. Combined Multiplier SVG ──
   const cmbYMin = 0.9, cmbYMax = 2.2;
@@ -2624,6 +2635,7 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
   }
   cmbSvg += svgLegend(cmbSeries.map(s => ({ color: s.color, width: s.width, label: s.name })), CH + 8);
   cmbSvg += '</svg>';
+
 
   // ── 4. OT Progressive SVG (dual-axis: bars + lines) ──
   const otData = [2,4,6,8,10,12,14].filter(c => baseWeeks - c >= 8).map(c => {
@@ -2679,6 +2691,7 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
   ], CH + 8);
   otSvg += '</svg>';
 
+
   // ── 5. Risk Band SVG (grouped bar) ──
   const riskFactors = ['PF Scale', 'Fatigue Scale', 'Stacking Scale'];
   const riskBands = [
@@ -2708,6 +2721,7 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
   });
   riskSvg += svgLegend(riskBands.map(b => ({ color: b.color, width: 8, label: b.label })), CH + 8);
   riskSvg += '</svg>';
+
 
   // ── Waterfall SVG (horizontal bar chart) ──
   const wfData = forecast.waterfallData || [];
@@ -2755,6 +2769,7 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
     });
     waterfallSvg += '</svg>';
   }
+
 
   // ── Schedule Optimization Curve SVG ──
   const curveData = optimization.curve || [];
@@ -2853,6 +2868,7 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
     }).join('');
     scheduleSvg += '</svg>';
   }
+
 
   // ── Gantt Schedule SVG ──
   const ganttBars = forecast.ganttBars || [];
@@ -2973,6 +2989,7 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
     }
     ganttSvg += '</svg>';
   }
+
 
 
   const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
@@ -3138,8 +3155,8 @@ ${mcaaSvg}
 <table style="font-size:10px;margin-top:8px">
   <thead><tr><th style="font-size:9px">Schedule</th>${mcaaHeaders}</tr></thead>
   <tbody>
-    <tr><td style="padding:2px 4px;border-bottom:1px solid #e0e2e8;font-weight:600;white-space:nowrap;font-size:10px">50 hr/wk</td>${mcaa50Cells}</tr>
     <tr><td style="padding:2px 4px;border-bottom:1px solid #e0e2e8;font-weight:600;white-space:nowrap;font-size:10px">60 hr/wk</td>${mcaa60Cells}</tr>
+    <tr><td style="padding:2px 4px;border-bottom:1px solid #e0e2e8;font-weight:600;white-space:nowrap;font-size:10px">70 hr/wk</td>${mcaa70Cells}</tr>
   </tbody>
 </table>
 <div style="font-size:10px;color:#9ca3af;margin-top:4px">Sources: Hanna, Sullivan, Lackney (2004); Hanna, Taylor, Sullivan (2005) ASCE JCEM; BRT (1980); NECA (1989); Thomas/Penn State (1997); US Army COE (1979)</div>
@@ -3196,6 +3213,7 @@ ${cmbSvg}
   </button>
 </div>
 </body></html>`;
+
 
   // Use iframe with srcdoc — avoids cross-origin blob issues and popup blockers
   let iframe = document.getElementById("__pdf_print_frame");
