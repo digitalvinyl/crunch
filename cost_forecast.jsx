@@ -6772,7 +6772,7 @@ function CostForecastApp() {
           boxShadow: `0 2px 12px ${COLORS.bg}88`,
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <div style={{ flex: 1 }}>
+            <div style={{ flex: 1, position: "relative" }}>
               <input
                 type="range"
                 style={styles.slider}
@@ -6784,6 +6784,27 @@ function CostForecastApp() {
                   setWeekOffset(Math.max(v, minWeeks - baseWeeks));
                 }}
               />
+              {/* Optimal-cost diamond markers */}
+              {["sat", "satSun"].map((mode) => {
+                const opt = optimalByOt[mode];
+                if (!opt) return null;
+                const sMin = sliderMinWeeks - baseWeeks;
+                const sMax = otMode !== "none" ? 0 : noOtMaxWeeks - baseWeeks;
+                const range = sMax - sMin;
+                if (range === 0) return null;
+                const pct = ((opt.offset - sMin) / range) * 100;
+                if (pct < 0 || pct > 100) return null;
+                return (
+                  <div key={mode} title={`${OT_MODES[mode]} optimal: ${opt.offset} wks`} style={{
+                    position: "absolute", top: "50%", left: `${pct}%`,
+                    transform: "translate(-50%, -50%) rotate(45deg)",
+                    width: 7, height: 7,
+                    background: mode === "sat" ? COLORS.orange : "#fbbf24",
+                    opacity: otMode === mode ? 0.9 : 0.4,
+                    pointerEvents: "none", borderRadius: 1,
+                  }} />
+                );
+              })}
             </div>
             <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.accent, whiteSpace: "nowrap", minWidth: 90, textAlign: "center" }}>
               {weekOffset === 0 ? "Baseline" : `${weekOffset > 0 ? "+" : ""}${weekOffset} wks`}
@@ -6803,9 +6824,18 @@ function CostForecastApp() {
                     fontFamily: FONT,
                   }}
                   onClick={() => {
-                    setOtMode(key);
-                    if (key === "none") { setWeekOffset(0); }
-                    else { const opt = optimalByOt[key]; if (opt) setWeekOffset(opt.offset); }
+                    if (key === "none") {
+                      setOtMode(key);
+                      setWeekOffset(0);
+                    } else if (otMode === "none") {
+                      setOtMode(key);
+                      setWeekOffset(0); // Start at baseline — drag left to add OT
+                    } else {
+                      // Switching between OT modes — preserve offset, clamp to new mode's min
+                      setOtMode(key);
+                      const newMin = getMinWeeks(baseWeeks, getOtCapacity(key), hoursData, xerSchedule);
+                      setWeekOffset(Math.max(weekOffset, newMin - baseWeeks));
+                    }
                   }}
                 >
                   {label}
@@ -6819,7 +6849,11 @@ function CostForecastApp() {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
             <div>
               <div style={styles.cardTitle}>Schedule Duration Adjustment</div>
-              <div style={{ fontSize: 12, color: COLORS.textDim, marginTop: -8 }}>Drag the slider to extend or compress the project schedule</div>
+              <div style={{ fontSize: 12, color: COLORS.textDim, marginTop: -8 }}>
+                {otMode !== "none"
+                  ? "Drag left to progressively add overtime"
+                  : "Drag the slider to extend or compress the project schedule"}
+              </div>
             </div>
             <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
               <div style={{ textAlign: "center" }}>
@@ -6835,18 +6869,17 @@ function CostForecastApp() {
                         fontFamily: FONT,
                       }}
                       onClick={() => {
-                        setOtMode(key);
                         if (key === "none") {
-                          // No OT — reset to baseline
+                          setOtMode(key);
                           setWeekOffset(0);
+                        } else if (otMode === "none") {
+                          setOtMode(key);
+                          setWeekOffset(0); // Start at baseline — drag left to add OT
                         } else {
-                          // OT — snap to optimal point for this mode
-                          const opt = optimalByOt[key];
-                          if (opt) {
-                            setWeekOffset(opt.offset);
-                          } else {
-                            if (weekOffset > 0) setWeekOffset(0);
-                          }
+                          // Switching between OT modes — preserve offset, clamp to new mode's min
+                          setOtMode(key);
+                          const newMin = getMinWeeks(baseWeeks, getOtCapacity(key), hoursData, xerSchedule);
+                          setWeekOffset(Math.max(weekOffset, newMin - baseWeeks));
                         }
                       }}
                     >
@@ -6874,6 +6907,27 @@ function CostForecastApp() {
                   setWeekOffset(Math.max(v, minWeeks - baseWeeks));
                 }}
               />
+              {/* Optimal-cost diamond markers */}
+              {["sat", "satSun"].map((mode) => {
+                const opt = optimalByOt[mode];
+                if (!opt) return null;
+                const sMin = sliderMinWeeks - baseWeeks;
+                const sMax = otMode !== "none" ? 0 : noOtMaxWeeks - baseWeeks;
+                const range = sMax - sMin;
+                if (range === 0) return null;
+                const pct = ((opt.offset - sMin) / range) * 100;
+                if (pct < 0 || pct > 100) return null;
+                return (
+                  <div key={mode} title={`${OT_MODES[mode]} optimal: ${opt.offset} wks`} style={{
+                    position: "absolute", top: "50%", left: `${pct}%`,
+                    transform: "translate(-50%, -50%) rotate(45deg)",
+                    width: 8, height: 8,
+                    background: mode === "sat" ? COLORS.orange : "#fbbf24",
+                    opacity: otMode === mode ? 0.9 : 0.4,
+                    pointerEvents: "none", borderRadius: 1,
+                  }} />
+                );
+              })}
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
               <span style={{ fontSize: 11, color: otMode === "none" ? COLORS.textMuted : COLORS.green }}>
