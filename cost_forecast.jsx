@@ -9,6 +9,7 @@ const { AreaChart, Area, BarChart, Bar, LineChart, Line, XAxis, YAxis, Cartesian
 
 const FONT = "'JetBrains Mono', 'SF Mono', 'Fira Code', monospace";
 const DISPLAY_FONT = "'Barlow Condensed', 'Oswald', 'Arial Narrow', sans-serif";
+const SIDEBAR_WIDTH = 195;
 
 const DARK_COLORS = {
   bg: "#0f1117",
@@ -17,10 +18,10 @@ const DARK_COLORS = {
   border: "#2d3348",
   borderLight: "#3d4560",
   text: "#e8eaf0",
-  textDim: "#8892a8",
-  textMuted: "#5a6380",
+  textDim: "#9ba3bb",
+  textMuted: "#6d7694",
   accent: "#f59e0b",
-  accentDim: "#b45309",
+  accentDim: "#d97706",
   accentLight: "#fbbf24",
   green: "#22c55e",
   greenDim: "#166534",
@@ -43,8 +44,8 @@ const LIGHT_COLORS = {
   border: "#d1d5e0",
   borderLight: "#bfc4d3",
   text: "#1a1d27",
-  textDim: "#5a6380",
-  textMuted: "#8892a8",
+  textDim: "#4a5168",
+  textMuted: "#6b7280",
   accent: "#d97706",
   accentDim: "#b45309",
   accentLight: "#f59e0b",
@@ -1176,12 +1177,15 @@ function StepperInput({ value, onChange, step = 1, min, max, width = 80, disable
     <div style={{ textAlign: "center", opacity: disabled ? 0.35 : 1, transition: "opacity 0.2s" }}>
       {label && <div style={{ fontSize: 11, color: COLORS.textDim, textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</div>}
       <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "center", marginTop: label ? 4 : 0 }}>
-        <div
+        <button
+          type="button"
+          aria-label="Decrement"
+          disabled={disabled || !canDecrement}
           style={btnStyle(canDecrement)}
           onClick={() => handleStep(-1)}
           onMouseEnter={(e) => { if (canDecrement && !disabled) { e.currentTarget.style.background = COLORS.border; e.currentTarget.style.color = COLORS.text; }}}
           onMouseLeave={(e) => { e.currentTarget.style.background = canDecrement && !disabled ? COLORS.surfaceAlt : "transparent"; e.currentTarget.style.color = canDecrement && !disabled ? COLORS.textDim : COLORS.border; }}
-        >−</div>
+        >−</button>
         <input
           style={{
             background: COLORS.surfaceAlt, border: `1px solid ${COLORS.border}`, borderRadius: 4,
@@ -1192,12 +1196,15 @@ function StepperInput({ value, onChange, step = 1, min, max, width = 80, disable
           type="number" step={step} min={min} max={max} value={value} disabled={disabled}
           onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) onChange(v); }}
         />
-        <div
+        <button
+          type="button"
+          aria-label="Increment"
+          disabled={disabled || !canIncrement}
           style={btnStyle(canIncrement)}
           onClick={() => handleStep(1)}
           onMouseEnter={(e) => { if (canIncrement && !disabled) { e.currentTarget.style.background = COLORS.border; e.currentTarget.style.color = COLORS.text; }}}
           onMouseLeave={(e) => { e.currentTarget.style.background = canIncrement && !disabled ? COLORS.surfaceAlt : "transparent"; e.currentTarget.style.color = canIncrement && !disabled ? COLORS.textDim : COLORS.border; }}
-        >+</div>
+        >+</button>
       </div>
       {hint && <div style={{ fontSize: 9, color: COLORS.textMuted, marginTop: 2 }}>{hint}</div>}
     </div>
@@ -1206,7 +1213,7 @@ function StepperInput({ value, onChange, step = 1, min, max, width = 80, disable
 
 function getStyles(COLORS) { return {
   container: { background: COLORS.bg, color: COLORS.text, fontFamily: FONT, minHeight: "100vh", fontSize: 13, display: "flex", flexDirection: "row" },
-  sidebar: { display: "flex", flexDirection: "column", gap: 0, borderRight: `1px solid ${COLORS.border}`, padding: "0 0 16px", minWidth: 195, position: "sticky", top: 0, alignSelf: "flex-start", height: "100vh", overflowY: "auto", background: COLORS.bg, borderLeft: `3px solid ${COLORS.accent}` },
+  sidebar: { display: "flex", flexDirection: "column", gap: 0, borderRight: `1px solid ${COLORS.border}`, padding: "0 0 16px", minWidth: SIDEBAR_WIDTH, width: SIDEBAR_WIDTH, position: "sticky", top: 0, alignSelf: "flex-start", height: "100vh", overflowY: "auto", background: COLORS.bg, borderLeft: `3px solid ${COLORS.accent}`, flexShrink: 0, transition: "width 0.2s, min-width 0.2s" },
   mainContent: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column" },
   header: { padding: "0 28px", height: 52, borderBottom: `1px solid ${COLORS.border}`, display: "flex", alignItems: "center", justifyContent: "flex-end" },
   title: { fontFamily: DISPLAY_FONT, fontSize: 28, fontWeight: 700, letterSpacing: "3px", textTransform: "uppercase", color: COLORS.text },
@@ -1328,6 +1335,19 @@ function getSliderCSS(COLORS) { return `
     background-color: ${COLORS.accent}35 !important;
     box-shadow: 0 1px 2px ${COLORS.accent}20;
   }
+  button:focus-visible {
+    outline: 2px solid ${COLORS.accent};
+    outline-offset: 2px;
+    z-index: 1;
+  }
+  input:focus-visible {
+    outline: 2px solid ${COLORS.accent};
+    outline-offset: -1px;
+  }
+  input[type="range"]:focus-visible {
+    outline: 2px solid ${COLORS.accent};
+    outline-offset: 4px;
+  }
   .nav-tab {
     transition: all 0.15s ease;
   }
@@ -1336,6 +1356,31 @@ function getSliderCSS(COLORS) { return `
     color: ${COLORS.text} !important;
     border-left-color: ${COLORS.accent}88 !important;
   }
+  .nav-tab:focus-visible {
+    outline: 2px solid ${COLORS.accent};
+    outline-offset: -2px;
+    background: ${COLORS.accent}12 !important;
+  }
+  .drop-zone:focus-visible {
+    outline: 2px solid ${COLORS.accent};
+    outline-offset: 2px;
+  }
+  *:focus:not(:focus-visible) {
+    outline: none;
+  }
+  @media (max-width: 1100px) {
+    .crunch-sidebar { min-width: 52px !important; width: 52px !important; }
+    .crunch-sidebar .sidebar-brand-text { display: none !important; }
+    .crunch-sidebar .nav-tab span.tab-label { display: none !important; }
+    .crunch-sidebar .nav-tab { justify-content: center; padding-left: 0 !important; padding-right: 0 !important; }
+    .crunch-sticky-bar { left: 52px !important; }
+  }
+  @media (max-width: 800px) {
+    .crunch-sidebar { display: none !important; }
+    .crunch-mobile-tabs { display: flex !important; }
+    .crunch-sticky-bar { left: 0 !important; }
+  }
+  .crunch-mobile-tabs { display: none; }
 `; }
 
 function SetupTab({ disciplines, setDisciplines, timeCosts, setTimeCosts }) {
@@ -1569,6 +1614,11 @@ function HoursTab({ disciplines, setDisciplines, hoursData, setHoursData, baseWe
 
         {/* Drop zone */}
         <div
+          className="drop-zone"
+          role="button"
+          tabIndex={0}
+          aria-label="Import XER schedule file"
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInputRef.current?.click(); }}}
           onDragOver={(e) => { e.preventDefault(); setXerDragOver(true); }}
           onDragLeave={() => setXerDragOver(false)}
           onDrop={handleDrop}
@@ -3594,11 +3644,12 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
     return () => { if (exportRef) exportRef.current = null; };
   });
 
-  return (
-    <div>
+  // ─── Render Helpers (decomposed from monolithic return) ─────────────────
 
-      {/* Metrics */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16, alignItems: "stretch" }}>
+  const renderKPICards = () => (
+    <>
+      {/* Primary KPI Metrics */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16, alignItems: "stretch" }} aria-label="Key performance indicators" role="region">
         <div style={styles.metric(COLORS.accent)}>
           <div style={styles.metricValue}>{formatCurrency(forecast.adjTotalEAC)}</div>
           <div style={styles.metricLabel}>Forecast EAC</div>
@@ -3625,6 +3676,14 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
           <div style={styles.metricLabel}>Original Budget</div>
         </div>
       </div>
+    </>
+  );
+
+  return (
+    <div>
+
+      {/* ── KPI Cards (decomposed) ── */}
+      {renderKPICards()}
 
       {/* Enhanced Model Factors — only show when compression is active */}
       {(adjustedWeeks < baseWeeks || forecast.numOtWeeks > 0) && (
@@ -6041,8 +6100,6 @@ function AdjustmentsTab({ disciplines, hoursData, timeCosts, timeCostData, baseW
 function ModelsTab({ baseWeeks, hoursData, disciplines, xerSchedule }) {
   const COLORS = useColors();
   const styles = getStyles(COLORS);
-  const FONT = "'JetBrains Mono', 'SF Mono', 'Fira Code', monospace";
-  const DISPLAY_FONT = "'Barlow Condensed', 'Impact', sans-serif";
 
   // ── 1. Non-Linear PF Power Curve data ──
   const pfCurveData = useMemo(() => {
@@ -6500,6 +6557,70 @@ All multipliers are ≥ 1.0, so the combined effect is always ≥ base cost.`}
 }
 
 
+// ─── Shared slider sub-components (used in sticky bar + main card) ────────
+
+function OtModeButtons({ otMode, setOtMode, weekOffset, setWeekOffset, baseWeeks, hoursData, xerSchedule, compact = false }) {
+  const COLORS = useColors();
+  const size = compact ? { padding: "3px 8px", fontSize: 10 } : { padding: "5px 10px", fontSize: 11 };
+  return (
+    <div style={{ display: "flex", gap: compact ? 2 : 3, background: COLORS.bg, borderRadius: 4, padding: 2 }} role="radiogroup" aria-label="Overtime mode">
+      {Object.entries(OT_MODES).map(([key, label]) => (
+        <button
+          key={key}
+          role="radio"
+          aria-checked={otMode === key}
+          aria-label={`${label} overtime mode`}
+          style={{
+            ...size, fontWeight: 600, border: "none", borderRadius: 3, cursor: "pointer",
+            background: otMode === key ? (key === "none" ? COLORS.textMuted : COLORS.orange) : "transparent",
+            color: otMode === key ? COLORS.bg : COLORS.textDim,
+            fontFamily: FONT,
+          }}
+          onClick={() => {
+            if (key === "none") {
+              setOtMode(key);
+              setWeekOffset(0);
+            } else if (otMode === "none") {
+              setOtMode(key);
+              setWeekOffset(0);
+            } else {
+              setOtMode(key);
+              const newMin = getMinWeeks(baseWeeks, getOtCapacity(key), hoursData, xerSchedule);
+              setWeekOffset(Math.max(weekOffset, newMin - baseWeeks));
+            }
+          }}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function DiamondMarkers({ optimalByOt, otMode, sliderMinWeeks, baseWeeks, noOtMaxWeeks, size = 8 }) {
+  const COLORS = useColors();
+  const sMin = sliderMinWeeks - baseWeeks;
+  const sMax = otMode !== "none" ? 0 : noOtMaxWeeks - baseWeeks;
+  const range = sMax - sMin;
+  if (range === 0) return null;
+  return ["sat", "satSun"].map((mode) => {
+    const opt = optimalByOt[mode];
+    if (!opt) return null;
+    const pct = ((opt.offset - sMin) / range) * 100;
+    if (pct < 0 || pct > 100) return null;
+    return (
+      <div key={mode} title={`${OT_MODES[mode]} optimal: ${opt.offset} wks`} style={{
+        position: "absolute", top: "50%", left: `${pct}%`,
+        transform: "translate(-50%, -50%) rotate(45deg)",
+        width: size, height: size,
+        background: mode === "sat" ? COLORS.orange : "#fbbf24",
+        opacity: otMode === mode ? 0.9 : 0.4,
+        pointerEvents: "none", borderRadius: 1,
+      }} />
+    );
+  });
+}
+
 function CostForecastApp() {
   const [theme, setTheme] = useState("light");
   const COLORS = theme === "light" ? LIGHT_COLORS : DARK_COLORS;
@@ -6652,7 +6773,7 @@ function CostForecastApp() {
       <style>{getSliderCSS(COLORS)}</style>
 
       {/* Left Sidebar */}
-      <div style={styles.sidebar}>
+      <nav className="crunch-sidebar" style={styles.sidebar} aria-label="Main navigation">
         <div style={{ padding: "0 16px", height: 52, borderBottom: `1px solid ${COLORS.border}`, marginBottom: 8, display: "flex", alignItems: "center" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{
@@ -6674,14 +6795,14 @@ function CostForecastApp() {
                 <polyline points="30,14.5 27.5,16 30,17.5" stroke={COLORS.accent} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
               </svg>
             </div>
-            <div>
+            <div className="sidebar-brand-text">
               <div style={{ fontFamily: DISPLAY_FONT, fontSize: 22, fontWeight: 700, letterSpacing: "3px", textTransform: "uppercase", color: COLORS.text, lineHeight: 1.1 }}>CRUNCH</div>
-              <div style={{ fontFamily: FONT, fontSize: 7.5, color: COLORS.textMuted, letterSpacing: "0.3px", lineHeight: 1.3 }}>Cost Risk Under Networked</div>
-              <div style={{ fontFamily: FONT, fontSize: 7.5, color: COLORS.textMuted, letterSpacing: "0.3px", lineHeight: 1.1 }}>Compression Heuristics</div>
+              <div style={{ fontFamily: FONT, fontSize: 9, color: COLORS.textMuted, letterSpacing: "0.3px", lineHeight: 1.3 }}>Cost Risk Under Networked</div>
+              <div style={{ fontFamily: FONT, fontSize: 9, color: COLORS.textMuted, letterSpacing: "0.3px", lineHeight: 1.1 }}>Compression Heuristics</div>
             </div>
           </div>
         </div>
-        <div style={styles.tabs}>
+        <div style={styles.tabs} role="tablist" aria-label="Main sections">
           {[
             { key: "forecast", label: "EAC Forecast", icon: "◈" },
             { key: "adjustments", label: "Adjustments", icon: "⚙" },
@@ -6690,11 +6811,25 @@ function CostForecastApp() {
             { key: "setup", label: "Setup", icon: "◧" },
             { key: "models", label: "Models", icon: "ƒ" },
           ].map((t) => (
-            <div key={t.key} className="nav-tab" style={styles.tab(activeTab === t.key)} onClick={() => setActiveTab(t.key)}>
-              <span style={{ fontSize: 12, opacity: 0.7, marginRight: 8 }}>{t.icon}</span>{t.label}
-            </div>
+            <button key={t.key} role="tab" aria-selected={activeTab === t.key} aria-controls={`panel-${t.key}`} className="nav-tab" style={{ ...styles.tab(activeTab === t.key), border: "none", background: styles.tab(activeTab === t.key).background, display: "flex", alignItems: "center", cursor: "pointer", width: "100%" }} onClick={() => setActiveTab(t.key)}>
+              <span style={{ fontSize: 12, opacity: 0.7, marginRight: 8, flexShrink: 0 }}>{t.icon}</span><span className="tab-label">{t.label}</span>
+            </button>
           ))}
         </div>
+      </nav>
+
+      {/* Mobile Tab Bar — visible only on small screens */}
+      <div className="crunch-mobile-tabs" style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 200, background: COLORS.surface, borderTop: `1px solid ${COLORS.border}`, display: "none", justifyContent: "space-around", padding: "6px 0" }}>
+        {[
+          { key: "forecast", icon: "◈" },
+          { key: "adjustments", icon: "⚙" },
+          { key: "data", icon: "▤" },
+          { key: "hours", icon: "⏱" },
+          { key: "setup", icon: "◧" },
+          { key: "models", icon: "ƒ" },
+        ].map((t) => (
+          <button key={t.key} role="tab" aria-selected={activeTab === t.key} onClick={() => setActiveTab(t.key)} style={{ background: "none", border: "none", color: activeTab === t.key ? COLORS.accent : COLORS.textDim, fontSize: 18, cursor: "pointer", padding: "4px 8px", opacity: activeTab === t.key ? 1 : 0.6 }} aria-label={t.key}>{t.icon}</button>
+        ))}
       </div>
 
       {/* Main Content */}
@@ -6703,12 +6838,14 @@ function CostForecastApp() {
         <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
           <button
             onClick={() => { if (exportRef.current) exportRef.current(); }}
+            disabled={activeTab !== "forecast"}
+            aria-label="Export CRUNCH report"
             style={{
               background: "transparent",
               border: `1px solid ${COLORS.border}`,
               borderRadius: 4,
               padding: "6px 14px",
-              cursor: "pointer",
+              cursor: activeTab === "forecast" ? "pointer" : "default",
               fontSize: 12,
               fontFamily: FONT,
               fontWeight: 500,
@@ -6716,7 +6853,7 @@ function CostForecastApp() {
               display: "flex",
               alignItems: "center",
               gap: 6,
-              opacity: exportRef.current || activeTab === "forecast" ? 1 : 0.4,
+              opacity: activeTab === "forecast" ? 1 : 0.35,
               transition: "opacity 0.15s",
             }}
             title={activeTab !== "forecast" ? "Switch to EAC Forecast tab to enable export" : "Export CRUNCH report"}
@@ -6726,6 +6863,7 @@ function CostForecastApp() {
           <div style={{ width: 1, height: 30, background: COLORS.border }} />
           <button
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
             style={{
               background: "transparent",
               border: `1px solid ${COLORS.border}`,
@@ -6760,10 +6898,10 @@ function CostForecastApp() {
 
       {/* Compact sticky slider bar */}
       {sliderSticky && activeTab !== "models" && (
-        <div style={{
+        <div className="crunch-sticky-bar" style={{
           position: "fixed",
           top: 0,
-          left: 170,
+          left: SIDEBAR_WIDTH,
           right: 0,
           zIndex: 100,
           background: COLORS.surface,
@@ -6775,6 +6913,7 @@ function CostForecastApp() {
             <div style={{ flex: 1, position: "relative" }}>
               <input
                 type="range"
+                aria-label="Schedule duration adjustment"
                 style={styles.slider}
                 min={sliderMinWeeks - baseWeeks}
                 max={otMode !== "none" ? 0 : noOtMaxWeeks - baseWeeks}
@@ -6784,27 +6923,7 @@ function CostForecastApp() {
                   setWeekOffset(Math.max(v, minWeeks - baseWeeks));
                 }}
               />
-              {/* Optimal-cost diamond markers */}
-              {["sat", "satSun"].map((mode) => {
-                const opt = optimalByOt[mode];
-                if (!opt) return null;
-                const sMin = sliderMinWeeks - baseWeeks;
-                const sMax = otMode !== "none" ? 0 : noOtMaxWeeks - baseWeeks;
-                const range = sMax - sMin;
-                if (range === 0) return null;
-                const pct = ((opt.offset - sMin) / range) * 100;
-                if (pct < 0 || pct > 100) return null;
-                return (
-                  <div key={mode} title={`${OT_MODES[mode]} optimal: ${opt.offset} wks`} style={{
-                    position: "absolute", top: "50%", left: `${pct}%`,
-                    transform: "translate(-50%, -50%) rotate(45deg)",
-                    width: 7, height: 7,
-                    background: mode === "sat" ? COLORS.orange : "#fbbf24",
-                    opacity: otMode === mode ? 0.9 : 0.4,
-                    pointerEvents: "none", borderRadius: 1,
-                  }} />
-                );
-              })}
+              <DiamondMarkers optimalByOt={optimalByOt} otMode={otMode} sliderMinWeeks={sliderMinWeeks} baseWeeks={baseWeeks} noOtMaxWeeks={noOtMaxWeeks} size={7} />
             </div>
             <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.accent, whiteSpace: "nowrap", minWidth: 90, textAlign: "center" }}>
               {weekOffset === 0 ? "Baseline" : `${weekOffset > 0 ? "+" : ""}${weekOffset} wks`}
@@ -6813,35 +6932,7 @@ function CostForecastApp() {
             <div style={{ fontSize: 12, color: COLORS.textDim, whiteSpace: "nowrap" }}>
               {adjustedEndDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
             </div>
-            <div style={{ display: "flex", gap: 2, background: COLORS.bg, borderRadius: 4, padding: 2 }}>
-              {Object.entries(OT_MODES).map(([key, label]) => (
-                <button
-                  key={key}
-                  style={{
-                    padding: "3px 8px", fontSize: 10, fontWeight: 600, border: "none", borderRadius: 3, cursor: "pointer",
-                    background: otMode === key ? (key === "none" ? COLORS.textMuted : COLORS.orange) : "transparent",
-                    color: otMode === key ? COLORS.bg : COLORS.textDim,
-                    fontFamily: FONT,
-                  }}
-                  onClick={() => {
-                    if (key === "none") {
-                      setOtMode(key);
-                      setWeekOffset(0);
-                    } else if (otMode === "none") {
-                      setOtMode(key);
-                      setWeekOffset(0); // Start at baseline — drag left to add OT
-                    } else {
-                      // Switching between OT modes — preserve offset, clamp to new mode's min
-                      setOtMode(key);
-                      const newMin = getMinWeeks(baseWeeks, getOtCapacity(key), hoursData, xerSchedule);
-                      setWeekOffset(Math.max(weekOffset, newMin - baseWeeks));
-                    }
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            <OtModeButtons otMode={otMode} setOtMode={setOtMode} weekOffset={weekOffset} setWeekOffset={setWeekOffset} baseWeeks={baseWeeks} hoursData={hoursData} xerSchedule={xerSchedule} compact={true} />
           </div>
         </div>
       )}
@@ -6858,35 +6949,7 @@ function CostForecastApp() {
             <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
               <div style={{ textAlign: "center" }}>
                 <div style={{ fontSize: 11, color: COLORS.textDim, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 4 }}>Overtime</div>
-                <div style={{ display: "flex", gap: 3, background: COLORS.bg, borderRadius: 4, padding: 2 }}>
-                  {Object.entries(OT_MODES).map(([key, label]) => (
-                    <button
-                      key={key}
-                      style={{
-                        padding: "5px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 3, cursor: "pointer",
-                        background: otMode === key ? (key === "none" ? COLORS.textMuted : COLORS.orange) : "transparent",
-                        color: otMode === key ? COLORS.bg : COLORS.textDim,
-                        fontFamily: FONT,
-                      }}
-                      onClick={() => {
-                        if (key === "none") {
-                          setOtMode(key);
-                          setWeekOffset(0);
-                        } else if (otMode === "none") {
-                          setOtMode(key);
-                          setWeekOffset(0); // Start at baseline — drag left to add OT
-                        } else {
-                          // Switching between OT modes — preserve offset, clamp to new mode's min
-                          setOtMode(key);
-                          const newMin = getMinWeeks(baseWeeks, getOtCapacity(key), hoursData, xerSchedule);
-                          setWeekOffset(Math.max(weekOffset, newMin - baseWeeks));
-                        }
-                      }}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
+                <OtModeButtons otMode={otMode} setOtMode={setOtMode} weekOffset={weekOffset} setWeekOffset={setWeekOffset} baseWeeks={baseWeeks} hoursData={hoursData} xerSchedule={xerSchedule} />
                 <div style={{ fontSize: 9, color: COLORS.textMuted, marginTop: 2 }}>Progressive — slide to add OT</div>
               </div>
             </div>
@@ -6898,6 +6961,8 @@ function CostForecastApp() {
             <div style={{ position: "relative" }}>
               <input
                 type="range"
+                aria-label="Schedule duration adjustment"
+                aria-valuetext={weekOffset === 0 ? "Baseline" : `${weekOffset} weeks`}
                 style={styles.slider}
                 min={sliderMinWeeks - baseWeeks}
                 max={otMode !== "none" ? 0 : noOtMaxWeeks - baseWeeks}
@@ -6907,27 +6972,7 @@ function CostForecastApp() {
                   setWeekOffset(Math.max(v, minWeeks - baseWeeks));
                 }}
               />
-              {/* Optimal-cost diamond markers */}
-              {["sat", "satSun"].map((mode) => {
-                const opt = optimalByOt[mode];
-                if (!opt) return null;
-                const sMin = sliderMinWeeks - baseWeeks;
-                const sMax = otMode !== "none" ? 0 : noOtMaxWeeks - baseWeeks;
-                const range = sMax - sMin;
-                if (range === 0) return null;
-                const pct = ((opt.offset - sMin) / range) * 100;
-                if (pct < 0 || pct > 100) return null;
-                return (
-                  <div key={mode} title={`${OT_MODES[mode]} optimal: ${opt.offset} wks`} style={{
-                    position: "absolute", top: "50%", left: `${pct}%`,
-                    transform: "translate(-50%, -50%) rotate(45deg)",
-                    width: 8, height: 8,
-                    background: mode === "sat" ? COLORS.orange : "#fbbf24",
-                    opacity: otMode === mode ? 0.9 : 0.4,
-                    pointerEvents: "none", borderRadius: 1,
-                  }} />
-                );
-              })}
+              <DiamondMarkers optimalByOt={optimalByOt} otMode={otMode} sliderMinWeeks={sliderMinWeeks} baseWeeks={baseWeeks} noOtMaxWeeks={noOtMaxWeeks} size={8} />
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
               <span style={{ fontSize: 11, color: otMode === "none" ? COLORS.textMuted : COLORS.green }}>
@@ -6940,6 +6985,7 @@ function CostForecastApp() {
                 </span>
                 {(weekOffset !== 0 || otMode !== "none") && (
                   <button
+                    aria-label="Reset schedule to baseline"
                     onClick={() => { setWeekOffset(0); setOtMode("none"); }}
                     style={{
                       background: "transparent", border: `1px solid ${COLORS.border}`,
@@ -7028,7 +7074,7 @@ function CostForecastApp() {
           </div>
         </div>
       </div>
-      <div style={styles.body}>
+      <div style={styles.body} role="tabpanel" id={`panel-${activeTab}`} aria-label={activeTab} aria-live="polite">
         {activeTab === "setup" && <SetupTab disciplines={disciplines} setDisciplines={setDisciplines} timeCosts={timeCosts} setTimeCosts={setTimeCosts} />}
         {activeTab === "hours" && <HoursTab disciplines={disciplines} setDisciplines={setDisciplines} hoursData={hoursData} setHoursData={setHoursData} baseWeeks={baseWeeks} setBaseWeeks={setBaseWeeks} startDate={startDate} setStartDate={setStartDate} setWeekOffset={setWeekOffset} setDisciplinePFs={setDisciplinePFs} xerSchedule={xerSchedule} setXerSchedule={setXerSchedule} />}
         {activeTab === "data" && <DataTab disciplines={disciplines} hoursData={hoursData} timeCosts={timeCosts} timeCostData={timeCostData} baseWeeks={baseWeeks} startDate={startDate} />}
