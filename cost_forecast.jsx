@@ -1699,11 +1699,9 @@ function HoursTab({ disciplines, setDisciplines, hoursData, setHoursData, baseWe
               Import a Primavera P6 XER file to populate disciplines and weekly hours, or use demo data.
             </div>
           </div>
-          {xerSummary && (
-            <button style={{ ...styles.btn("default"), fontSize: 11 }} onClick={handleResetToDemo}>
-              Reset to Demo Data
-            </button>
-          )}
+          <button style={{ ...styles.btn("default"), fontSize: 11 }} onClick={handleResetToDemo}>
+            Reset to Default
+          </button>
         </div>
 
         {/* Drop zone */}
