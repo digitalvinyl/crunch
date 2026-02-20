@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <!--
+    CRUNCH Logo — Compressed Hourglass
+    A visibly squeezed hourglass with inward chevron marks showing
+    compression force. Monochrome amber, works on dark or light bg.
+  -->
+  <defs>
+    <linearGradient id="sand" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fbbf24"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Outer frame — top and bottom bars -->
+  <rect x="120" y="56" width="272" height="16" rx="8" fill="#f59e0b"/>
+  <rect x="120" y="440" width="272" height="16" rx="8" fill="#f59e0b"/>
+
+  <!-- Hourglass outline — squeezed narrow at the waist -->
+  <!-- Top half: wide at top, pinches to narrow neck -->
+  <path d="M136 72 L136 112 Q136 168 196 220 L232 248 L280 248 L316 220 Q376 168 376 112 L376 72"
+        stroke="#f59e0b" stroke-width="12" stroke-linejoin="round" fill="none"/>
+  <!-- Bottom half: narrow neck opens to wide bottom -->
+  <path d="M136 440 L136 400 Q136 344 196 292 L232 264 L280 264 L316 292 Q376 344 376 400 L376 440"
+        stroke="#f59e0b" stroke-width="12" stroke-linejoin="round" fill="none"/>
+
+  <!-- Sand remaining in top -->
+  <path d="M160 108 Q160 148 200 184 L236 208 L276 208 L312 184 Q352 148 352 108 L352 92 L160 92 Z"
+        fill="url(#sand)" opacity="0.3"/>
+
+  <!-- Sand pile in bottom -->
+  <path d="M160 420 L160 404 Q160 364 200 328 L240 298 L272 298 L312 328 Q352 364 352 404 L352 420 Z"
+        fill="url(#sand)" opacity="0.5"/>
+
+  <!-- Sand stream through neck -->
+  <rect x="250" y="232" width="12" height="48" rx="6" fill="#f59e0b" opacity="0.7"/>
+
+  <!-- Falling particles -->
+  <circle cx="256" cy="292" r="4" fill="#f59e0b" opacity="0.8"/>
+  <circle cx="253" cy="310" r="3" fill="#f59e0b" opacity="0.5"/>
+  <circle cx="259" cy="326" r="2.5" fill="#f59e0b" opacity="0.35"/>
+
+  <!-- Compression chevrons — left side pushing in -->
+  <polyline points="72,232 104,256 72,280" stroke="#f59e0b" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <polyline points="44,220 84,256 44,292" stroke="#f59e0b" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.45"/>
+
+  <!-- Compression chevrons — right side pushing in -->
+  <polyline points="440,232 408,256 440,280" stroke="#f59e0b" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <polyline points="468,220 428,256 468,292" stroke="#f59e0b" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.45"/>
+</svg>

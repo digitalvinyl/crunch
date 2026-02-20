@@ -6660,9 +6660,20 @@ function CostForecastApp() {
               background: `${COLORS.accent}18`,
               border: `2px solid ${COLORS.accent}44`,
               display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: 17, fontWeight: 800, color: COLORS.accent, fontFamily: DISPLAY_FONT,
-              lineHeight: 1, flexShrink: 0,
-            }}>C</div>
+              flexShrink: 0,
+            }}>
+              <svg width="18" height="18" viewBox="0 0 32 32" fill="none">
+                <rect x="6" y="2" width="20" height="2" rx="1" fill={COLORS.accent}/>
+                <rect x="6" y="28" width="20" height="2" rx="1" fill={COLORS.accent}/>
+                <path d="M8 4L8 8Q8 12 13 15.5L15 17L17 17L19 15.5Q24 12 24 8L24 4" stroke={COLORS.accent} strokeWidth="1.5" strokeLinejoin="round" fill="none"/>
+                <path d="M8 28L8 24Q8 20 13 16.5L15 15L17 15L19 16.5Q24 20 24 24L24 28" stroke={COLORS.accent} strokeWidth="1.5" strokeLinejoin="round" fill="none"/>
+                <path d="M10 7Q10 10 14 13L16 14.5L18 13Q22 10 22 7L22 5L10 5Z" fill={COLORS.accent} opacity="0.3"/>
+                <path d="M10 27L10 25Q10 22 14 19L16 17.5L18 19Q22 22 22 25L22 27Z" fill={COLORS.accent} opacity="0.5"/>
+                <rect x="15.25" y="14.5" width="1.5" height="3" rx="0.75" fill={COLORS.accent} opacity="0.7"/>
+                <polyline points="2,14.5 4.5,16 2,17.5" stroke={COLORS.accent} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+                <polyline points="30,14.5 27.5,16 30,17.5" stroke={COLORS.accent} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+              </svg>
+            </div>
             <div>
               <div style={{ fontFamily: DISPLAY_FONT, fontSize: 22, fontWeight: 700, letterSpacing: "3px", textTransform: "uppercase", color: COLORS.text, lineHeight: 1.1 }}>CRUNCH</div>
               <div style={{ fontFamily: FONT, fontSize: 7.5, color: COLORS.textMuted, letterSpacing: "0.3px", lineHeight: 1.3 }}>Cost Risk Under Networked</div>
