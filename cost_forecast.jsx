@@ -726,6 +726,13 @@ function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
   activities.forEach(a => { if (!sortedSet.has(a.id)) sorted.push(a.id); });
 
   if (ratio >= 1.0) {
+    // ── Capture CPM baseline at original durations first ──
+    Object.values(taskMap).forEach(t => { t.newDays = t.origDays; });
+    runForwardPass(sorted, taskMap, predecessors);
+    Object.values(taskMap).forEach(t => {
+      t.baselineES = t.earlyStart;
+      t.baselineEF = t.earlyFinish;
+    });
     // ── Extension: uniform proportional growth (unchanged behavior) ──
     Object.values(taskMap).forEach(t => {
       t.newDays = Math.round(t.origDays * ratio);
@@ -753,6 +760,15 @@ function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
     Object.values(taskMap).forEach(t => { t.newDays = t.origDays; });
     runForwardPass(sorted, taskMap, predecessors);
     const origProjectEnd = runBackwardPass(sorted, taskMap, successors);
+
+    // Snapshot the uncompressed CPM positions for baseline display in the Gantt.
+    // These are the "true" baseline positions computed through the logic network,
+    // as opposed to the raw XER calendar dates which may differ due to P6 calendars,
+    // constraints, and non-working-day calculations that CPM doesn't model.
+    Object.values(taskMap).forEach(t => {
+      t.baselineES = t.earlyStart;
+      t.baselineEF = t.earlyFinish;
+    });
 
     const totalProjectCompression = origProjectEnd - totalTargetDays;
 
@@ -865,8 +881,8 @@ function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
     discipline: t.discipline,
     discId: t.discId,
     hours: t.hours,
-    baseStartDay: t.startDay,
-    baseEndDay: t.endDay,
+    baseStartDay: t.baselineES != null ? t.baselineES : t.startDay,
+    baseEndDay: t.baselineEF != null ? t.baselineEF : t.endDay,
     adjStartDay: t.earlyStart,
     adjEndDay: t.earlyFinish,
     origDays: t.origDays,
