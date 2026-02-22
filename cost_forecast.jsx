@@ -5802,7 +5802,7 @@ function DataTab({ disciplines, hoursData, timeCosts, timeCostData, baseWeeks, s
   );
 }
 
-function AdjustmentsTab({ disciplines, hoursData, timeCosts, timeCostData, baseWeeks, startDate, weekOffset, otMode, disciplinePFs, setDisciplinePFs, xerSchedule }) {
+function AdjustmentsTab({ disciplines, hoursData, timeCosts, timeCostData, baseWeeks, startDate, weekOffset, otMode, otScope, disciplinePFs, setDisciplinePFs, xerSchedule }) {
   const COLORS = useColors();
   const styles = getStyles(COLORS);
   const [viewMode, setViewMode] = useState("cost_delta");
@@ -5851,6 +5851,12 @@ function AdjustmentsTab({ disciplines, hoursData, timeCosts, timeCostData, baseW
     const numOtWeeks = getOtWeeks(effectiveWeeks, baseWeeks, otMode);
     const otStartWeek = effectiveWeeks - numOtWeeks;
 
+    // Per-discipline compression data for task-specific OT scope
+    const perDiscPFMap = (cpmResult && cpmResult.discCompression && effectiveWeeks < baseWeeks)
+      ? getPerDisciplinePF(cpmResult.discCompression)
+      : {};
+    const hasPerDiscPF = Object.keys(perDiscPFMap).length > 0;
+
     const discData = disciplines.map((d) => {
       const origHours = hoursData[d.id] || new Array(baseWeeks).fill(0);
       const adjHours = cpmResult
@@ -5860,17 +5866,27 @@ function AdjustmentsTab({ disciplines, hoursData, timeCosts, timeCostData, baseW
       const totalAdjHours = adjHours.reduce((s, h) => s + h, 0);
       const origCostTotal = totalOrigHours * d.rate;
       const discPF = getDiscPF(d.id);
-      const adjCostTotal = computeEnhancedCost(origHours, d.rate, d.otRate, otMode, baseWeeks, effectiveWeeks, discPF, stackingPenalties, RISK_BANDS.P50, adjHours);
+
+      // Determine if this discipline's tasks were actually compressed
+      const discIsCompressed = hasPerDiscPF
+        ? (perDiscPFMap[d.id] !== undefined && perDiscPFMap[d.id] < 1.0)
+        : (effectiveWeeks < baseWeeks);
+      const discOtActive = otScope === "zone" || discIsCompressed;
+
+      const adjCostTotal = computeEnhancedCost(origHours, d.rate, d.otRate, otMode, baseWeeks, effectiveWeeks, discPF, stackingPenalties, RISK_BANDS.P50, adjHours, discOtActive);
 
       const weeks = [];
       for (let w = 0; w < maxW; w++) {
         const bh = w < baseWeeks ? (origHours[w] || 0) : 0;
         const ah = w < effectiveWeeks ? (adjHours[w] || 0) : 0;
         const bc = bh * d.rate;
-        const weekRate = getWeekRate(d.rate, d.otRate, otMode, w, effectiveWeeks, baseWeeks);
+        // In task-specific OT scope, non-compressed disciplines stay at base rate
+        const weekRate = discOtActive
+          ? getWeekRate(d.rate, d.otRate, otMode, w, effectiveWeeks, baseWeeks)
+          : d.rate;
         // Per-week multiplier with MCAA fatigue + stacking
         let weekMultiplier = 1 / discPF;
-        if (otMode !== "none" && w >= otStartWeek && numOtWeeks > 0 && w < effectiveWeeks) {
+        if (discOtActive && otMode !== "none" && w >= otStartWeek && numOtWeeks > 0 && w < effectiveWeeks) {
           const consecutiveOtWeek = w - otStartWeek + 1;
           weekMultiplier *= (1 / getMCAAFatigue(otMode, consecutiveOtWeek));
         }
@@ -5887,6 +5903,7 @@ function AdjustmentsTab({ disciplines, hoursData, timeCosts, timeCostData, baseW
         id: d.id, name: d.name, rate: d.rate, weeks,
         totalOrigHours, totalAdjHours, deltaHours: totalAdjHours - totalOrigHours,
         origCostTotal, adjCostTotal, deltaCost: adjCostTotal - origCostTotal,
+        otActive: discOtActive,
       };
     });
 
@@ -5937,7 +5954,7 @@ function AdjustmentsTab({ disciplines, hoursData, timeCosts, timeCostData, baseW
       deltaEAC: (totalAdjDirect + totalAdjTime) - (totalOrigDirect + totalOrigTime),
       effectiveWeeks,
     };
-  }, [disciplines, hoursData, timeCosts, timeCostData, baseWeeks, adjustedWeeks, maxCompression, maxExtension, maxW, otMode, disciplinePFs, xerSchedule]);
+  }, [disciplines, hoursData, timeCosts, timeCostData, baseWeeks, adjustedWeeks, maxCompression, maxExtension, maxW, otMode, otScope, disciplinePFs, xerSchedule]);
 
   const weeksArr = Array.from({ length: maxW }, (_, i) => i);
   const cellNum = { textAlign: "right", fontVariantNumeric: "tabular-nums" };
@@ -7531,7 +7548,7 @@ function CostForecastApp() {
         {activeTab === "setup" && <SetupTab disciplines={disciplines} setDisciplines={setDisciplines} timeCosts={timeCosts} setTimeCosts={setTimeCosts} />}
         {activeTab === "hours" && <HoursTab disciplines={disciplines} setDisciplines={setDisciplines} hoursData={hoursData} setHoursData={setHoursData} baseWeeks={baseWeeks} setBaseWeeks={setBaseWeeks} startDate={startDate} setStartDate={setStartDate} setWeekOffset={setWeekOffset} setDisciplinePFs={setDisciplinePFs} xerSchedule={xerSchedule} setXerSchedule={setXerSchedule} />}
         {activeTab === "data" && <DataTab disciplines={disciplines} hoursData={hoursData} timeCosts={timeCosts} timeCostData={timeCostData} baseWeeks={baseWeeks} startDate={startDate} />}
-        {activeTab === "adjustments" && <AdjustmentsTab disciplines={disciplines} hoursData={hoursData} timeCosts={timeCosts} timeCostData={timeCostData} baseWeeks={baseWeeks} startDate={startDate} weekOffset={weekOffset} otMode={otMode} disciplinePFs={disciplinePFs} setDisciplinePFs={setDisciplinePFs} xerSchedule={xerSchedule} />}
+        {activeTab === "adjustments" && <AdjustmentsTab disciplines={disciplines} hoursData={hoursData} timeCosts={timeCosts} timeCostData={timeCostData} baseWeeks={baseWeeks} startDate={startDate} weekOffset={weekOffset} otMode={otMode} otScope={otScope} disciplinePFs={disciplinePFs} setDisciplinePFs={setDisciplinePFs} xerSchedule={xerSchedule} />}
         {activeTab === "forecast" && <ForecastTab disciplines={disciplines} hoursData={hoursData} timeCosts={timeCosts} baseWeeks={baseWeeks} startDate={startDate} weekOffset={weekOffset} setWeekOffset={setWeekOffset} otMode={otMode} otScope={otScope} disciplinePFs={disciplinePFs} exportRef={exportRef} pendingExport={pendingExport} xerSchedule={xerSchedule} />}
         {activeTab === "models" && <ModelsTab baseWeeks={baseWeeks} hoursData={hoursData} disciplines={disciplines} xerSchedule={xerSchedule} />}
       </div>
