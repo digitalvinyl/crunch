@@ -3714,12 +3714,17 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
         const bd = weeklyDirectByDisc[d.id];
         const bh = w < baseWeeks ? (bd.baseHours[w] || 0) : 0;
         const ah = w < effectiveWeeks ? (bd.adjHours[w] || 0) : 0;
-        const weekRate = getWeekRate(d.rate, d.otRate, otMode, w, effectiveWeeks, baseWeeks);
+        // In task-specific OT scope, non-compressed disciplines stay at base rate
+        const discOtActive = bd.otActive !== false; // default true for backward compat
+        const weekRate = discOtActive
+          ? getWeekRate(d.rate, d.otRate, otMode, w, effectiveWeeks, baseWeeks)
+          : d.rate;
         const discPF = getDiscPF(d.id);
 
         // Per-week multiplier with MCAA fatigue + stacking
         let weekMultiplier = 1 / discPF;
-        if (otMode !== "none" && w >= otStartWeek && numOtWeeks > 0 && w < effectiveWeeks) {
+        // MCAA fatigue only applies to disciplines that are working OT
+        if (discOtActive && otMode !== "none" && w >= otStartWeek && numOtWeeks > 0 && w < effectiveWeeks) {
           const consecutiveOtWeek = w - otStartWeek + 1;
           const mcaaPI = getMCAAFatigue(otMode, consecutiveOtWeek);
           weekMultiplier *= (1 / mcaaPI);
