@@ -174,6 +174,127 @@ function parseP6Date(dateStr) {
   return null;
 }
 
+// ── P6 Calendar Parsing ──────────────────────────────────────────────────────
+// Parses the clndr_data field from XER CALENDAR records to determine which
+// days of the week are workdays and which calendar dates are holiday exceptions.
+// Returns a workday calendar object used for CPM date arithmetic.
+
+function parseP6Calendar(tables, taskClndrId, projClndrId) {
+  const calendars = tables.CALENDAR || [];
+  // Find the calendar record — prefer task-level, fall back to project-level
+  const clndrId = taskClndrId || projClndrId;
+  const cal = calendars.find(c => c.clndr_id === clndrId)
+    || calendars.find(c => c.clndr_id === projClndrId)
+    || calendars[0];
+  if (!cal) return null;
+
+  const dayHrCnt = parseFloat(cal.day_hr_cnt) || 8;
+  const weekHrCnt = parseFloat(cal.week_hr_cnt) || 40;
+
+  // Parse DaysOfWeek from clndr_data — work days have shift definitions,
+  // non-work days have empty child nodes: (0||N()())
+  // Days: 1=Sun, 2=Mon, 3=Tue, 4=Wed, 5=Thu, 6=Fri, 7=Sat
+  const workDays = [false, false, false, false, false, false, false]; // index 0=Sun ... 6=Sat
+  const data = cal.clndr_data || '';
+  const dowMatch = data.match(/DaysOfWeek\(\)\(([\s\S]*?)\)\)\s*\(0\|\|/);
+  if (dowMatch) {
+    for (let p6Day = 1; p6Day <= 7; p6Day++) {
+      // Non-work day pattern: (0||N()()) — empty children
+      // Work day pattern: (0||N()( ... shift data ... ))
+      const dayPattern = new RegExp('\\(0\\|\\|' + p6Day + '\\(\\)\\(\\s*\\)\\)');
+      const jsDow = p6Day % 7; // P6: 1=Sun→0, 2=Mon→1, ... 7=Sat→6
+      workDays[jsDow] = !dayPattern.test(dowMatch[1]);
+    }
+  } else {
+    // Default: Mon-Fri work week
+    workDays[1] = workDays[2] = workDays[3] = workDays[4] = workDays[5] = true;
+  }
+
+  // Parse holiday exceptions from clndr_data
+  // Format: (0||N(d|SERIAL_DATE)(...)) where SERIAL_DATE is Excel serial date
+  // Excel epoch: Dec 30, 1899 (day 1 = Jan 1, 1900, with the 1900 leap year bug)
+  const excelEpochMs = Date.UTC(1899, 11, 30); // Dec 30, 1899
+  const msPerDay = 86400000;
+  const holidays = new Set();
+  const excMatch = data.match(/Exceptions\(\)\(([\s\S]*)\)\)\s*\)\)/);
+  if (excMatch) {
+    const excRegex = /\(0\|\|\d+\(d\|(\d+)\)\(([^)]*)\)/g;
+    let m;
+    while ((m = excRegex.exec(excMatch[1])) !== null) {
+      const serial = parseInt(m[1]);
+      const hasWorkHours = m[2] && m[2].trim().length > 0;
+      // If exception has work hours defined, it's a modified workday not a full holiday
+      if (!hasWorkHours) {
+        const dateMs = excelEpochMs + serial * msPerDay;
+        const dateStr = new Date(dateMs).toISOString().slice(0, 10);
+        holidays.add(dateStr);
+      }
+    }
+  }
+
+  // Also inherit holidays from base calendar if this is a project calendar
+  if (cal.base_clndr_id) {
+    const baseCal = calendars.find(c => c.clndr_id === cal.base_clndr_id);
+    if (baseCal && baseCal.clndr_data) {
+      const baseExcMatch = baseCal.clndr_data.match(/Exceptions\(\)\(([\s\S]*)\)\)\s*\)\)/);
+      if (baseExcMatch) {
+        const excRegex2 = /\(0\|\|\d+\(d\|(\d+)\)\(([^)]*)\)/g;
+        let m2;
+        while ((m2 = excRegex2.exec(baseExcMatch[1])) !== null) {
+          const serial = parseInt(m2[1]);
+          const hasWorkHours = m2[2] && m2[2].trim().length > 0;
+          if (!hasWorkHours) {
+            const dateMs = excelEpochMs + serial * msPerDay;
+            const dateStr = new Date(dateMs).toISOString().slice(0, 10);
+            holidays.add(dateStr);
+          }
+        }
+      }
+    }
+  }
+
+  return { dayHrCnt, weekHrCnt, workDays, holidays };
+}
+
+// Build a workday calendar for a date range. Creates lookup arrays that convert
+// between calendar days (from project start) and work days, respecting the
+// P6 work week pattern and holiday exceptions.
+function buildWorkdayCalendar(projStart, numCalendarWeeks, calendarInfo) {
+  const msPerDay = 86400000;
+  const projStartMs = projStart.getTime();
+  // Extend range beyond project end to handle compression lookups
+  const totalCalDays = (numCalendarWeeks + 4) * 7;
+
+  // calDayIsWork[i] = true if calendar day i (from project start) is a workday
+  const calDayIsWork = new Array(totalCalDays).fill(false);
+  // workDayToCalDay[w] = the calendar day index of the w-th work day (0-based)
+  const workDayToCalDay = [];
+  // calDayToWorkDay[i] = how many work days have elapsed by calendar day i
+  const calDayToWorkDay = new Array(totalCalDays).fill(0);
+
+  let workDayCount = 0;
+  for (let d = 0; d < totalCalDays; d++) {
+    const date = new Date(projStartMs + d * msPerDay);
+    const dow = date.getUTCDay(); // 0=Sun ... 6=Sat
+    const dateStr = date.toISOString().slice(0, 10);
+    const isWork = calendarInfo.workDays[dow] && !calendarInfo.holidays.has(dateStr);
+    calDayIsWork[d] = isWork;
+    if (isWork) {
+      workDayToCalDay.push(d);
+      workDayCount++;
+    }
+    calDayToWorkDay[d] = workDayCount;
+  }
+
+  return {
+    calDayIsWork,
+    workDayToCalDay,      // workDay index → calDay index
+    calDayToWorkDay,      // calDay index → cumulative workDay count
+    totalWorkDays: workDayCount,
+    dayHrCnt: calendarInfo.dayHrCnt,
+  };
+}
+
 function processXER(text) {
   const tables = parseXER(text);
 
@@ -411,6 +532,25 @@ function buildScheduleData(tasks, assignments, tables, discIdMap, projStart, num
   const projStartMs = projStart.getTime();
   const msPerDay = 86400000;
 
+  // ── Parse P6 work calendar ──
+  // Determine the project's default calendar and the most common task calendar
+  const project = (tables.PROJECT || [])[0];
+  const projClndrId = project ? project.clndr_id : null;
+  // Most tasks share one calendar — find the most common clndr_id
+  const clndrCounts = {};
+  const allTasks = tables.TASK || [];
+  allTasks.forEach(t => {
+    if (t.clndr_id) clndrCounts[t.clndr_id] = (clndrCounts[t.clndr_id] || 0) + 1;
+  });
+  const taskClndrId = Object.keys(clndrCounts).sort((a, b) => clndrCounts[b] - clndrCounts[a])[0] || null;
+  const calendarInfo = parseP6Calendar(tables, taskClndrId, projClndrId);
+  const dayHrCnt = calendarInfo ? calendarInfo.dayHrCnt : 8;
+
+  // Build workday calendar for the project range
+  const wdCal = calendarInfo
+    ? buildWorkdayCalendar(projStart, numWeeks, calendarInfo)
+    : null;
+
   // Map taskId → discipline (from assignments)
   const taskDisc = {};
   assignments.forEach(a => {
@@ -423,18 +563,24 @@ function buildScheduleData(tasks, assignments, tables, discIdMap, projStart, num
     taskHours[a.taskId] = (taskHours[a.taskId] || 0) + a.hours;
   });
 
-  // Build activities list
+  // Build activities list.
+  // startDay/endDay = calendar day offsets from project start (from XER dates).
+  // workDays = work-day duration from target_drtn_hr_cnt / dayHrCnt.
   const activities = Object.entries(tasks).map(([id, t]) => {
     const disc = taskDisc[id] || 'Unassigned';
     const discId = discIdMap[disc] || 0;
     const startDay = (t.start.getTime() - projStartMs) / msPerDay;
     const endDay = (t.end.getTime() - projStartMs) / msPerDay;
-    const rawTask = (tables.TASK || []).find(tt => tt.task_id === id);
-    const totalFloat = rawTask ? parseFloat(rawTask.total_float_hr_cnt || 0) / 8 : 0; // convert to days
+    const rawTask = allTasks.find(tt => tt.task_id === id);
+    const totalFloat = rawTask ? parseFloat(rawTask.total_float_hr_cnt || 0) / dayHrCnt : 0;
     const isCritical = totalFloat <= 0;
+    // Work-day duration from P6's target duration hours
+    const drtnHrs = rawTask ? parseFloat(rawTask.target_drtn_hr_cnt || 0) : 0;
+    const workDays = drtnHrs > 0 ? Math.max(1, drtnHrs / dayHrCnt) : Math.max(1, endDay - startDay);
     return {
       id, name: t.name, start: t.start, end: t.end,
       startDay, endDay,
+      workDays,            // P6 work-day duration (for CPM)
       discipline: disc, discId,
       hours: taskHours[id] || 0,
       totalFloat,
@@ -444,24 +590,18 @@ function buildScheduleData(tasks, assignments, tables, discIdMap, projStart, num
   }).sort((a, b) => a.endDay - b.endDay || a.startDay - b.startDay);
 
   // Parse relationships (TASKPRED)
+  // Lag is in hours — convert to work days using the calendar's dayHrCnt
   const relationships = [];
   (tables.TASKPRED || []).forEach(r => {
     const fromId = r.pred_task_id;
     const toId = r.task_id;
     if (!tasks[fromId] || !tasks[toId]) return;
     const predType = r.pred_type || 'PR_FS'; // FS, FF, SS, SF
-    const lag = parseFloat(r.lag_hr_cnt || 0) / 8; // hours to days
+    const lag = parseFloat(r.lag_hr_cnt || 0) / dayHrCnt; // hours to work days
     relationships.push({ fromId, toId, type: predType, lag });
   });
 
-  // XER project end in calendar days from project start — the actual P6 schedule span.
-  // This differs from numWeeks*7 because P6 includes inter-task calendar gaps (weekends,
-  // constraints) that are lost when CPM chains task durations continuously.
-  const xerProjectEndDay = activities.length > 0
-    ? Math.max(...activities.map(a => a.endDay))
-    : numWeeks * 7;
-
-  return { activities, relationships, projStartMs, numWeeks, xerProjectEndDay };
+  return { activities, relationships, projStartMs, numWeeks, wdCal, dayHrCnt };
 }
 
 // Core proportional redistribution (used internally)
@@ -666,24 +806,23 @@ function runBackwardPass(sorted, taskMap, successors) {
 }
 
 // Run CPM-based schedule compression using float-aware crashing.
-// Only critical/near-critical tasks are compressed; high-float tasks retain
-// their original durations and absorb compression through the logic network.
+// CPM operates in WORK-DAY units (from P6 target_drtn_hr_cnt / dayHrCnt).
+// Work-day positions are converted to calendar-day positions using the parsed
+// P6 work calendar (workday map with holidays), so Gantt bars and hours align
+// exactly with the original XER schedule dates.
 // otMode controls the physical compression floor per task (Sat=5/6, Sat+Sun=5/7).
 function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
   if (!schedule || !schedule.activities || schedule.activities.length === 0) return null;
-  const { activities, relationships } = schedule;
+  const { activities, relationships, wdCal } = schedule;
 
-  // Use the actual XER project end (P6 calendar span) as the baseline reference,
-  // not baseWeeks*7 which may include padding from ceil rounding.
-  const xerEndDay = schedule.xerProjectEndDay || baseWeeks * 7;
   const totalBaseDays = baseWeeks * 7;
   const totalTargetDays = targetWeeks * 7;
   const ratio = totalTargetDays / totalBaseDays;
 
-  // OT compression floor: the minimum fraction each task's calendar duration can reach.
-  // Base schedule = 5 work days per 7 calendar days.
-  // Sat OT = 6 work days per 7 cal days → each task compresses to 5/6 of original.
-  // Sat+Sun OT = 7 work days per 7 cal days → each task compresses to 5/7 of original.
+  // OT compression floor: the minimum fraction each task's work-day duration can reach.
+  // Base schedule = 5 work days per week.
+  // Sat OT = 6 work days per week → each task compresses to 5/6 of original.
+  // Sat+Sun OT = 7 work days per week → each task compresses to 5/7 of original.
   // No OT = no extra work days → tasks cannot compress (floor = 1.0).
   const BASE_WORK_DAYS = 5;
   let otWorkDays = BASE_WORK_DAYS;
@@ -691,15 +830,39 @@ function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
   else if (otMode === "satSun") otWorkDays = 7;
   const otFloor = BASE_WORK_DAYS / otWorkDays; // 1.0, 5/6, or 5/7
 
-  // Build task map with original durations
+  // ── Calendar conversion helpers ──
+  // Convert work-day position (from CPM) to calendar-day position (for display)
+  function workDayToCalDay(wd) {
+    if (!wdCal) return wd * 7 / 5; // fallback: uniform 5/7 ratio
+    const wdInt = Math.floor(wd);
+    const frac = wd - wdInt;
+    if (wdInt >= wdCal.workDayToCalDay.length) {
+      // Beyond calendar range — extrapolate
+      const lastCal = wdCal.workDayToCalDay[wdCal.workDayToCalDay.length - 1] || 0;
+      return lastCal + (wdInt - wdCal.workDayToCalDay.length + 1) * 7 / 5;
+    }
+    const calDay = wdCal.workDayToCalDay[wdInt] || 0;
+    return calDay + frac; // fractional work day → fractional calendar day
+  }
+
+  // Convert calendar-day position to work-day count
+  function calDayToWorkDay(cd) {
+    if (!wdCal) return cd * 5 / 7; // fallback
+    const cdInt = Math.min(Math.floor(cd), wdCal.calDayToWorkDay.length - 1);
+    if (cdInt < 0) return 0;
+    return wdCal.calDayToWorkDay[cdInt] || 0;
+  }
+
+  // Build task map with WORK-DAY durations (from P6 target_drtn_hr_cnt / dayHrCnt)
   const taskMap = {};
   activities.forEach(a => {
-    const origDays = Math.max(1, a.endDay - a.startDay);
+    const origWorkDays = a.workDays;  // already computed in buildScheduleData
     taskMap[a.id] = {
-      ...a, origDays,
-      newDays: origDays,
-      earlyStart: 0, earlyFinish: origDays,
-      lateStart: 0, lateFinish: origDays, totalFloat: 0,
+      ...a,
+      origDays: origWorkDays,         // work-day duration (NOT calendar days)
+      newDays: origWorkDays,
+      earlyStart: 0, earlyFinish: origWorkDays,
+      lateStart: 0, lateFinish: origWorkDays, totalFloat: 0,
     };
   });
 
@@ -735,86 +898,52 @@ function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
   const sortedSet = new Set(sorted);
   activities.forEach(a => { if (!sortedSet.has(a.id)) sorted.push(a.id); });
 
+  // ── Compute baseline work-day project end via CPM ──
+  Object.values(taskMap).forEach(t => { t.newDays = t.origDays; });
+  runForwardPass(sorted, taskMap, predecessors);
+  const baselineProjectEnd = runBackwardPass(sorted, taskMap, successors);
+
+  // Snapshot the uncompressed CPM positions (in work days)
+  Object.values(taskMap).forEach(t => {
+    t.baselineES = t.earlyStart;
+    t.baselineEF = t.earlyFinish;
+  });
+
+  // Target in work days: convert calendar target to work days using the calendar
+  const targetWorkDays = calDayToWorkDay(totalTargetDays);
+
   if (ratio >= 1.0) {
-    // ── Capture CPM baseline at original durations first ──
-    Object.values(taskMap).forEach(t => { t.newDays = t.origDays; });
-    runForwardPass(sorted, taskMap, predecessors);
+    // ── Extension: uniform proportional growth ──
+    const extRatio = baselineProjectEnd > 0
+      ? targetWorkDays / baselineProjectEnd
+      : ratio;
     Object.values(taskMap).forEach(t => {
-      t.baselineES = t.earlyStart;
-      t.baselineEF = t.earlyFinish;
-    });
-    // ── Extension: uniform proportional growth (unchanged behavior) ──
-    Object.values(taskMap).forEach(t => {
-      t.newDays = Math.round(t.origDays * ratio);
+      t.newDays = Math.max(1, Math.round(t.origDays * extRatio));
     });
     runForwardPass(sorted, taskMap, predecessors);
   } else {
     // ═══════════════════════════════════════════════════════════════════
-    // Float-Aware Iterative Schedule Crashing
-    //
-    // Proper CPM crashing: repeatedly identify the critical path, then
-    // distribute a small increment of compression proportionally across
-    // critical tasks that have remaining OT capacity. Non-critical tasks
-    // (those with float ≥ the compression achieved so far) are never
-    // touched. This avoids over-compressing any single task or path.
-    //
-    // Phase 1: Full CPM (forward + backward) at original durations
-    //          → establishes baseline critical path and dynamic float
-    // Phase 2: Iterative 1-day crashing loop
-    //          → each iteration: identify critical tasks, distribute
-    //            1 day of compression proportionally, re-run CPM
-    // Phase 3: Final CPM for accurate post-compression float values
+    // Float-Aware Iterative Schedule Crashing (in work-day units)
     // ═══════════════════════════════════════════════════════════════════
 
-    // ── Phase 1: CPM at original durations to compute dynamic float ──
-    Object.values(taskMap).forEach(t => { t.newDays = t.origDays; });
-    runForwardPass(sorted, taskMap, predecessors);
-    const origProjectEnd = runBackwardPass(sorted, taskMap, successors);
-
-    // Snapshot the uncompressed CPM positions for baseline display in the Gantt.
-    // These are the "true" baseline positions computed through the logic network,
-    // as opposed to the raw XER calendar dates which may differ due to P6 calendars,
-    // constraints, and non-working-day calculations that CPM doesn't model.
-    Object.values(taskMap).forEach(t => {
-      t.baselineES = t.earlyStart;
-      t.baselineEF = t.earlyFinish;
-    });
-
-    // Map the calendar-based target into CPM space.
-    // The CPM baseline end (origProjectEnd) is typically shorter than the XER calendar
-    // end (xerEndDay) because CPM chains tasks continuously without weekend gaps.
-    // Scale the target proportionally so the compression is meaningful.
-    const cpmTargetDays = xerEndDay > 0
-      ? origProjectEnd * (totalTargetDays / xerEndDay)
-      : totalTargetDays;
-    const totalProjectCompression = origProjectEnd - cpmTargetDays;
+    const totalProjectCompression = baselineProjectEnd - targetWorkDays;
 
     if (totalProjectCompression <= 0) {
       // No compression needed — already at or under target
-      // Leave original durations, forward pass already done
     } else {
-      // ── Phase 2: Iterative critical-path crashing ──
-      // Each iteration shaves 1 day off the project end by distributing
-      // compression proportionally among critical tasks. This mirrors
-      // standard CPM crash methodology: crash the critical path, re-run
-      // CPM, repeat. We batch by 1-day increments for efficiency.
-      //
-      // Cap iterations to prevent infinite loops on degenerate schedules.
-      const MAX_CRASH_ITERATIONS = Math.min(totalProjectCompression + 10, 500);
+      // ── Iterative critical-path crashing ──
+      const MAX_CRASH_ITERATIONS = Math.min(Math.ceil(totalProjectCompression) + 10, 500);
 
       for (let iter = 0; iter < MAX_CRASH_ITERATIONS; iter++) {
-        // Check current project end
         const projEnd = Math.max(...Object.values(taskMap).map(t => t.earlyFinish));
-        if (projEnd <= cpmTargetDays) break; // target reached (in CPM space)
+        if (projEnd <= targetWorkDays) break;
 
-        // Run backward pass to identify current critical path
         runBackwardPass(sorted, taskMap, successors);
 
-        // Collect critical tasks (float ≤ 0) that still have crash capacity
         const crashable = [];
         let totalCrashCapacity = 0;
         Object.values(taskMap).forEach(t => {
-          if (t.totalFloat > 0) return; // not critical — skip
+          if (t.totalFloat > 0) return;
           const minDays = Math.max(1, Math.ceil(t.origDays * otFloor));
           const remaining = t.newDays - minDays;
           if (remaining > 0) {
@@ -823,25 +952,13 @@ function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
           }
         });
 
-        if (crashable.length === 0 || totalCrashCapacity === 0) break; // floor reached
+        if (crashable.length === 0 || totalCrashCapacity === 0) break;
 
-        // How many project days do we still need to shave off (in CPM space)?
-        const overshoot = projEnd - cpmTargetDays;
+        const overshoot = projEnd - targetWorkDays;
 
-        // Distribute crash proportionally by each task's remaining capacity.
-        // We crash by exactly 1 day per task (minimum meaningful increment)
-        // to avoid over-shooting. For efficiency, when overshoot is large
-        // relative to the number of crashable tasks, we can safely crash
-        // each task by more than 1 day — but never more than proportional share.
-        //
-        // crashPerTask = max(1, round(task.remaining / totalCapacity * overshoot))
-        // This ensures we don't overshoot on any single task while making
-        // meaningful progress toward the target.
         let anyCompressed = false;
         crashable.forEach(({ task, remaining }) => {
-          // Proportional share of the needed compression
           const proportionalShare = Math.round((remaining / totalCrashCapacity) * overshoot);
-          // Crash by at least 1 day, at most the proportional share, at most remaining capacity
           const crash = Math.max(1, Math.min(proportionalShare, remaining));
           if (crash > 0) {
             task.newDays -= crash;
@@ -850,50 +967,52 @@ function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
         });
 
         if (!anyCompressed) break;
-
-        // Re-run forward pass with updated durations to see the new project end
         runForwardPass(sorted, taskMap, predecessors);
       }
     }
 
-    // ── Phase 3: Final full CPM for accurate post-compression float & criticality ──
+    // ── Final full CPM for accurate post-compression float & criticality ──
     runForwardPass(sorted, taskMap, predecessors);
     runBackwardPass(sorted, taskMap, successors);
   }
 
-  // CPM ↔ XER calendar scale factor.
-  // The CPM forward pass produces a shorter span than the XER calendar because it
-  // chains tasks continuously without inter-task weekend gaps. This scale factor
-  // maps CPM positions back to the XER calendar coordinate system.
-  const cpmProjEndDay = Math.max(...Object.values(taskMap).map(t => t.earlyFinish));
-  const origCpmEnd = Math.max(...Object.values(taskMap).map(t => t.baselineEF || t.earlyFinish));
-  const xerScale = origCpmEnd > 0 ? xerEndDay / origCpmEnd : 1;
-  const calendarProjEndDay = cpmProjEndDay * xerScale;
+  // ── Convert work-day positions to calendar-day positions ──
+  // The CPM operates in work days; map results back to calendar days for display
+  // and hours distribution using the P6 work calendar.
+  // At baseline (no compression/extension), use XER positions directly for exact match.
+  const noChange = (ratio >= 1.0 && Math.abs(ratio - 1.0) < 0.001);
+  const cpmEndWorkDays = Math.max(...Object.values(taskMap).map(t => t.earlyFinish));
+  const calendarProjEndDay = noChange
+    ? Math.max(...Object.values(taskMap).map(t => t.endDay))  // XER end at baseline
+    : workDayToCalDay(cpmEndWorkDays);
   const achievedWeeks = Math.max(4, Math.ceil(calendarProjEndDay / 7));
 
-  // Aggregate hours into weekly buckets per discipline.
-  // Use calendar-scaled positions so hours land in the correct calendar weeks.
+  // Aggregate hours into weekly buckets per discipline
   const hoursData = {};
   Object.values(taskMap).forEach(t => {
     const discId = t.discId;
     if (!discId) return;
     if (!hoursData[discId]) hoursData[discId] = new Array(achievedWeeks).fill(0);
-    // Ensure array is big enough
     while (hoursData[discId].length < achievedWeeks) hoursData[discId].push(0);
 
-    // Map CPM positions back to calendar space for week-bucket placement
-    const calStart = t.earlyStart * xerScale;
-    const calEnd = t.earlyFinish * xerScale;
-    const calDuration = Math.max(1, calEnd - calStart);
-    const hoursPerCalDay = t.hours / calDuration;
-    // Distribute hours across the task's calendar span, week by week
+    // Convert work-day span to calendar-day span
+    // At baseline, use XER positions; when compressed, use CPM→calendar conversion
+    const calStart = noChange ? t.startDay : workDayToCalDay(t.earlyStart);
+    const calEnd = noChange ? t.endDay : workDayToCalDay(t.earlyFinish);
     const startDay = Math.floor(calStart);
     const endDay = Math.ceil(calEnd);
+    // Count work days in the calendar span to distribute hours evenly across work days only
+    let workDaysInSpan = 0;
+    for (let day = startDay; day < endDay; day++) {
+      const isWork = wdCal ? (day < wdCal.calDayIsWork.length && wdCal.calDayIsWork[day]) : true;
+      if (isWork) workDaysInSpan++;
+    }
+    const hoursPerWorkDay = workDaysInSpan > 0 ? t.hours / workDaysInSpan : t.hours;
     for (let day = startDay; day < endDay; day++) {
       const week = Math.floor(day / 7);
-      if (week < achievedWeeks) {
-        // Workday factor: 5/7 of days are workdays
-        hoursData[discId][week] += hoursPerCalDay * (5 / 7);
+      if (week >= 0 && week < achievedWeeks) {
+        const isWork = wdCal ? (day < wdCal.calDayIsWork.length && wdCal.calDayIsWork[day]) : true;
+        if (isWork) hoursData[discId][week] += hoursPerWorkDay;
       }
     }
   });
@@ -904,24 +1023,14 @@ function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
   });
 
   // Build task-level bar data for Gantt display.
-  // Baseline positions use the original XER calendar dates (ground truth from P6).
-  // Adjusted positions are derived by mapping CPM compression deltas back into
-  // the XER calendar coordinate system, preserving inter-task calendar gaps
-  // (weekends, constraints) that the pure CPM forward pass would otherwise remove.
+  // Baseline: XER calendar positions (P6 ground truth).
+  // Adjusted: when no compression/extension, use XER positions (exact match).
+  //           when compressed/extended, use CPM work-day positions converted to calendar days.
   const taskBars = Object.values(taskMap).map(t => {
-    const xerCalDuration = Math.max(1, t.endDay - t.startDay); // XER calendar span
-    const compressionRatio = t.origDays > 0 ? t.newDays / t.origDays : 1;
-    const adjCalDuration = xerCalDuration * compressionRatio; // compressed calendar span
-
-    // Compute how much CPM shifted this task's start relative to baseline,
-    // then scale that delta to XER calendar space (CPM days are shorter than
-    // calendar days because CPM removes inter-task weekend gaps).
-    const baselineES = t.baselineES != null ? t.baselineES : t.earlyStart;
-    const cpmStartDelta = baselineES - t.earlyStart; // positive = CPM pulled earlier (CPM units)
-    const calStartDelta = cpmStartDelta * xerScale;   // convert to calendar days
-
-    // Apply the calendar-scaled shift to the XER start position
-    const adjStart = Math.max(0, t.startDay - calStartDelta);
+    // At baseline (no compression), adjusted = XER positions for exact visual match.
+    // When compressed or extended, adjusted = CPM positions mapped through the P6 work calendar.
+    const adjCalStart = noChange ? t.startDay : workDayToCalDay(t.earlyStart);
+    const adjCalEnd = noChange ? t.endDay : workDayToCalDay(t.earlyFinish);
 
     return {
       id: t.id,
@@ -929,15 +1038,15 @@ function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
       discipline: t.discipline,
       discId: t.discId,
       hours: t.hours,
-      baseStartDay: t.startDay,      // XER calendar position (ground truth)
-      baseEndDay: t.endDay,           // XER calendar position (ground truth)
-      adjStartDay: adjStart,
-      adjEndDay: adjStart + adjCalDuration,
-      origDays: t.origDays,
-      newDays: t.newDays,
-      isCritical: t.totalFloat <= 0,    // dynamic float from CPM, not static XER float
+      baseStartDay: t.startDay,       // XER calendar position (ground truth)
+      baseEndDay: t.endDay,            // XER calendar position (ground truth)
+      adjStartDay: adjCalStart,        // CPM work-day → calendar day via P6 calendar
+      adjEndDay: adjCalEnd,
+      origDays: t.origDays,            // work-day duration
+      newDays: t.newDays,              // compressed work-day duration
+      isCritical: t.totalFloat <= 0,
       isCompressed: t.newDays < t.origDays,
-      totalFloat: Math.max(0, t.totalFloat), // post-compression float for tooltip display
+      totalFloat: Math.max(0, t.totalFloat),
     };
   }).sort((a, b) => a.adjEndDay - b.adjEndDay || a.adjStartDay - b.adjStartDay);
 
