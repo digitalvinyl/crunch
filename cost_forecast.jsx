@@ -454,7 +454,14 @@ function buildScheduleData(tasks, assignments, tables, discIdMap, projStart, num
     relationships.push({ fromId, toId, type: predType, lag });
   });
 
-  return { activities, relationships, projStartMs, numWeeks };
+  // XER project end in calendar days from project start — the actual P6 schedule span.
+  // This differs from numWeeks*7 because P6 includes inter-task calendar gaps (weekends,
+  // constraints) that are lost when CPM chains task durations continuously.
+  const xerProjectEndDay = activities.length > 0
+    ? Math.max(...activities.map(a => a.endDay))
+    : numWeeks * 7;
+
+  return { activities, relationships, projStartMs, numWeeks, xerProjectEndDay };
 }
 
 // Core proportional redistribution (used internally)
@@ -666,6 +673,9 @@ function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
   if (!schedule || !schedule.activities || schedule.activities.length === 0) return null;
   const { activities, relationships } = schedule;
 
+  // Use the actual XER project end (P6 calendar span) as the baseline reference,
+  // not baseWeeks*7 which may include padding from ceil rounding.
+  const xerEndDay = schedule.xerProjectEndDay || baseWeeks * 7;
   const totalBaseDays = baseWeeks * 7;
   const totalTargetDays = targetWeeks * 7;
   const ratio = totalTargetDays / totalBaseDays;
@@ -770,7 +780,14 @@ function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
       t.baselineEF = t.earlyFinish;
     });
 
-    const totalProjectCompression = origProjectEnd - totalTargetDays;
+    // Map the calendar-based target into CPM space.
+    // The CPM baseline end (origProjectEnd) is typically shorter than the XER calendar
+    // end (xerEndDay) because CPM chains tasks continuously without weekend gaps.
+    // Scale the target proportionally so the compression is meaningful.
+    const cpmTargetDays = xerEndDay > 0
+      ? origProjectEnd * (totalTargetDays / xerEndDay)
+      : totalTargetDays;
+    const totalProjectCompression = origProjectEnd - cpmTargetDays;
 
     if (totalProjectCompression <= 0) {
       // No compression needed — already at or under target
@@ -788,7 +805,7 @@ function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
       for (let iter = 0; iter < MAX_CRASH_ITERATIONS; iter++) {
         // Check current project end
         const projEnd = Math.max(...Object.values(taskMap).map(t => t.earlyFinish));
-        if (projEnd <= totalTargetDays) break; // target reached
+        if (projEnd <= cpmTargetDays) break; // target reached (in CPM space)
 
         // Run backward pass to identify current critical path
         runBackwardPass(sorted, taskMap, successors);
@@ -808,8 +825,8 @@ function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
 
         if (crashable.length === 0 || totalCrashCapacity === 0) break; // floor reached
 
-        // How many project days do we still need to shave off?
-        const overshoot = projEnd - totalTargetDays;
+        // How many project days do we still need to shave off (in CPM space)?
+        const overshoot = projEnd - cpmTargetDays;
 
         // Distribute crash proportionally by each task's remaining capacity.
         // We crash by exactly 1 day per task (minimum meaningful increment)
@@ -844,11 +861,18 @@ function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
     runBackwardPass(sorted, taskMap, successors);
   }
 
-  // Project end in days → weeks
-  const projEndDay = Math.max(...Object.values(taskMap).map(t => t.earlyFinish));
-  const achievedWeeks = Math.max(4, Math.ceil(projEndDay / 7));
+  // CPM ↔ XER calendar scale factor.
+  // The CPM forward pass produces a shorter span than the XER calendar because it
+  // chains tasks continuously without inter-task weekend gaps. This scale factor
+  // maps CPM positions back to the XER calendar coordinate system.
+  const cpmProjEndDay = Math.max(...Object.values(taskMap).map(t => t.earlyFinish));
+  const origCpmEnd = Math.max(...Object.values(taskMap).map(t => t.baselineEF || t.earlyFinish));
+  const xerScale = origCpmEnd > 0 ? xerEndDay / origCpmEnd : 1;
+  const calendarProjEndDay = cpmProjEndDay * xerScale;
+  const achievedWeeks = Math.max(4, Math.ceil(calendarProjEndDay / 7));
 
-  // Aggregate hours into weekly buckets per discipline
+  // Aggregate hours into weekly buckets per discipline.
+  // Use calendar-scaled positions so hours land in the correct calendar weeks.
   const hoursData = {};
   Object.values(taskMap).forEach(t => {
     const discId = t.discId;
@@ -857,14 +881,19 @@ function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
     // Ensure array is big enough
     while (hoursData[discId].length < achievedWeeks) hoursData[discId].push(0);
 
-    const taskDays = Math.max(1, t.newDays);
-    const hoursPerDay = t.hours / taskDays;
-    // Distribute hours across the task's new span, week by week
-    for (let day = t.earlyStart; day < t.earlyFinish; day++) {
+    // Map CPM positions back to calendar space for week-bucket placement
+    const calStart = t.earlyStart * xerScale;
+    const calEnd = t.earlyFinish * xerScale;
+    const calDuration = Math.max(1, calEnd - calStart);
+    const hoursPerCalDay = t.hours / calDuration;
+    // Distribute hours across the task's calendar span, week by week
+    const startDay = Math.floor(calStart);
+    const endDay = Math.ceil(calEnd);
+    for (let day = startDay; day < endDay; day++) {
       const week = Math.floor(day / 7);
       if (week < achievedWeeks) {
         // Workday factor: 5/7 of days are workdays
-        hoursData[discId][week] += hoursPerDay * (5 / 7);
+        hoursData[discId][week] += hoursPerCalDay * (5 / 7);
       }
     }
   });
@@ -874,23 +903,43 @@ function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
     hoursData[k] = hoursData[k].map(h => Math.round(h));
   });
 
-  // Build task-level bar data for Gantt display
-  const taskBars = Object.values(taskMap).map(t => ({
-    id: t.id,
-    name: t.name,
-    discipline: t.discipline,
-    discId: t.discId,
-    hours: t.hours,
-    baseStartDay: t.baselineES != null ? t.baselineES : t.startDay,
-    baseEndDay: t.baselineEF != null ? t.baselineEF : t.endDay,
-    adjStartDay: t.earlyStart,
-    adjEndDay: t.earlyFinish,
-    origDays: t.origDays,
-    newDays: t.newDays,
-    isCritical: t.totalFloat <= 0,    // dynamic float from CPM, not static XER float
-    isCompressed: t.newDays < t.origDays,
-    totalFloat: Math.max(0, t.totalFloat), // post-compression float for tooltip display
-  })).sort((a, b) => a.adjEndDay - b.adjEndDay || a.adjStartDay - b.adjStartDay);
+  // Build task-level bar data for Gantt display.
+  // Baseline positions use the original XER calendar dates (ground truth from P6).
+  // Adjusted positions are derived by mapping CPM compression deltas back into
+  // the XER calendar coordinate system, preserving inter-task calendar gaps
+  // (weekends, constraints) that the pure CPM forward pass would otherwise remove.
+  const taskBars = Object.values(taskMap).map(t => {
+    const xerCalDuration = Math.max(1, t.endDay - t.startDay); // XER calendar span
+    const compressionRatio = t.origDays > 0 ? t.newDays / t.origDays : 1;
+    const adjCalDuration = xerCalDuration * compressionRatio; // compressed calendar span
+
+    // Compute how much CPM shifted this task's start relative to baseline,
+    // then scale that delta to XER calendar space (CPM days are shorter than
+    // calendar days because CPM removes inter-task weekend gaps).
+    const baselineES = t.baselineES != null ? t.baselineES : t.earlyStart;
+    const cpmStartDelta = baselineES - t.earlyStart; // positive = CPM pulled earlier (CPM units)
+    const calStartDelta = cpmStartDelta * xerScale;   // convert to calendar days
+
+    // Apply the calendar-scaled shift to the XER start position
+    const adjStart = Math.max(0, t.startDay - calStartDelta);
+
+    return {
+      id: t.id,
+      name: t.name,
+      discipline: t.discipline,
+      discId: t.discId,
+      hours: t.hours,
+      baseStartDay: t.startDay,      // XER calendar position (ground truth)
+      baseEndDay: t.endDay,           // XER calendar position (ground truth)
+      adjStartDay: adjStart,
+      adjEndDay: adjStart + adjCalDuration,
+      origDays: t.origDays,
+      newDays: t.newDays,
+      isCritical: t.totalFloat <= 0,    // dynamic float from CPM, not static XER float
+      isCompressed: t.newDays < t.origDays,
+      totalFloat: Math.max(0, t.totalFloat), // post-compression float for tooltip display
+    };
+  }).sort((a, b) => a.adjEndDay - b.adjEndDay || a.adjStartDay - b.adjStartDay);
 
   // Per-discipline compression ratios — aggregated from task-level compression
   // Used to compute per-discipline PF instead of a single global PF
