@@ -601,7 +601,7 @@ function buildScheduleData(tasks, assignments, tables, discIdMap, projStart, num
     relationships.push({ fromId, toId, type: predType, lag });
   });
 
-  return { activities, relationships, projStartMs, numWeeks, wdCal, dayHrCnt };
+  return { activities, relationships, projStartMs, numWeeks, wdCal, dayHrCnt, calendarInfo, projStart };
 }
 
 // Core proportional redistribution (used internally)
@@ -813,7 +813,7 @@ function runBackwardPass(sorted, taskMap, successors) {
 // otMode controls the physical compression floor per task (Sat=5/6, Sat+Sun=5/7).
 function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
   if (!schedule || !schedule.activities || schedule.activities.length === 0) return null;
-  const { activities, relationships, wdCal } = schedule;
+  const { activities, relationships, wdCal, calendarInfo, projStart, numWeeks } = schedule;
 
   const totalBaseDays = baseWeeks * 7;
   const totalTargetDays = targetWeeks * 7;
@@ -830,27 +830,46 @@ function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
   else if (otMode === "satSun") otWorkDays = 7;
   const otFloor = BASE_WORK_DAYS / otWorkDays; // 1.0, 5/6, or 5/7
 
+  // ── Build OT-expanded work calendar ──
+  // When OT is enabled, override the XER base calendar to include Saturday (and/or Sunday)
+  // as work days. This makes the CPM date arithmetic respect the expanded work week:
+  // a 10-work-day task with Sat OT completes in ~12 calendar days (10/6 weeks) not 14.
+  // The base wdCal (Mon-Fri) is used for the baseline snapshot; the OT calendar is used
+  // for compression targets, adjusted positions, and hours distribution.
+  let otCal = wdCal; // default: same as base calendar
+  if (otMode !== "none" && calendarInfo && projStart) {
+    // Clone workDays array and enable OT days
+    const otWorkDaysArr = [...calendarInfo.workDays];
+    if (otMode === "sat" || otMode === "satSun") otWorkDaysArr[6] = true;  // Saturday (index 6)
+    if (otMode === "satSun") otWorkDaysArr[0] = true;                      // Sunday (index 0)
+    const otCalInfo = { ...calendarInfo, workDays: otWorkDaysArr };
+    otCal = buildWorkdayCalendar(projStart, numWeeks, otCalInfo);
+  }
+
   // ── Calendar conversion helpers ──
+  // These use the OT-expanded calendar for compression/display mapping.
   // Convert work-day position (from CPM) to calendar-day position (for display)
-  function workDayToCalDay(wd) {
-    if (!wdCal) return wd * 7 / 5; // fallback: uniform 5/7 ratio
+  function workDayToCalDay(wd, cal) {
+    const c = cal || otCal;
+    if (!c) return wd * 7 / otWorkDays; // fallback
     const wdInt = Math.floor(wd);
     const frac = wd - wdInt;
-    if (wdInt >= wdCal.workDayToCalDay.length) {
+    if (wdInt >= c.workDayToCalDay.length) {
       // Beyond calendar range — extrapolate
-      const lastCal = wdCal.workDayToCalDay[wdCal.workDayToCalDay.length - 1] || 0;
-      return lastCal + (wdInt - wdCal.workDayToCalDay.length + 1) * 7 / 5;
+      const lastCal = c.workDayToCalDay[c.workDayToCalDay.length - 1] || 0;
+      return lastCal + (wdInt - c.workDayToCalDay.length + 1) * 7 / otWorkDays;
     }
-    const calDay = wdCal.workDayToCalDay[wdInt] || 0;
+    const calDay = c.workDayToCalDay[wdInt] || 0;
     return calDay + frac; // fractional work day → fractional calendar day
   }
 
   // Convert calendar-day position to work-day count
-  function calDayToWorkDay(cd) {
-    if (!wdCal) return cd * 5 / 7; // fallback
-    const cdInt = Math.min(Math.floor(cd), wdCal.calDayToWorkDay.length - 1);
+  function calDayToWorkDay(cd, cal) {
+    const c = cal || otCal;
+    if (!c) return cd * otWorkDays / 7; // fallback
+    const cdInt = Math.min(Math.floor(cd), c.calDayToWorkDay.length - 1);
     if (cdInt < 0) return 0;
-    return wdCal.calDayToWorkDay[cdInt] || 0;
+    return c.calDayToWorkDay[cdInt] || 0;
   }
 
   // Build task map with WORK-DAY durations (from P6 target_drtn_hr_cnt / dayHrCnt)
@@ -1001,17 +1020,19 @@ function compressByCPM(schedule, targetWeeks, baseWeeks, otMode) {
     const calEnd = noChange ? t.endDay : workDayToCalDay(t.earlyFinish);
     const startDay = Math.floor(calStart);
     const endDay = Math.ceil(calEnd);
-    // Count work days in the calendar span to distribute hours evenly across work days only
+    // Count work days in the calendar span to distribute hours evenly across work days only.
+    // Use the OT calendar (otCal) so that Saturday/Sunday hours count when OT is active.
+    const activeCal = noChange ? wdCal : otCal;
     let workDaysInSpan = 0;
     for (let day = startDay; day < endDay; day++) {
-      const isWork = wdCal ? (day < wdCal.calDayIsWork.length && wdCal.calDayIsWork[day]) : true;
+      const isWork = activeCal ? (day < activeCal.calDayIsWork.length && activeCal.calDayIsWork[day]) : true;
       if (isWork) workDaysInSpan++;
     }
     const hoursPerWorkDay = workDaysInSpan > 0 ? t.hours / workDaysInSpan : t.hours;
     for (let day = startDay; day < endDay; day++) {
       const week = Math.floor(day / 7);
       if (week >= 0 && week < achievedWeeks) {
-        const isWork = wdCal ? (day < wdCal.calDayIsWork.length && wdCal.calDayIsWork[day]) : true;
+        const isWork = activeCal ? (day < activeCal.calDayIsWork.length && activeCal.calDayIsWork[day]) : true;
         if (isWork) hoursData[discId][week] += hoursPerWorkDay;
       }
     }
