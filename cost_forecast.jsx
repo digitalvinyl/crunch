@@ -7,6 +7,8 @@ const { useState, useMemo, useCallback, useRef, useEffect, useContext, createCon
 const _Recharts = typeof Recharts !== "undefined" ? Recharts : (typeof require === "function" ? require("recharts") : {});
 const { AreaChart, Area, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ComposedChart, ReferenceLine, Cell } = _Recharts;
 
+const APP_VERSION = "0.4.5";
+
 const FONT = "'JetBrains Mono', 'SF Mono', 'Fira Code', monospace";
 const DISPLAY_FONT = "'Barlow Condensed', 'Oswald', 'Arial Narrow', sans-serif";
 const SIDEBAR_WIDTH = 195;
@@ -2651,7 +2653,7 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
   const tcRows = (timeCosts || []).map((t) => {
     const weeklyRate = t.basis === "weekly" ? t.rate : t.rate / 4.33;
     const base = weeklyRate * baseWeeks;
-    const adj = weeklyRate * calendarWeeks;
+    const adj = weeklyRate * effectiveWeeks;
     const delta = adj - base;
     return `<tr>
       <td style="padding:6px 12px;border-bottom:1px solid #e0e2e8">${t.name}</td>
@@ -3325,7 +3327,7 @@ function exportPDF(forecast, optimization, disciplines, timeCosts, baseWeeks, ad
   <div class="m">
     <div class="l">Adjusted End Date</div>
     <div class="v">${fmtDate(adjEndDate)}</div>
-    <div class="d">${Math.round(calendarWeeks)} wks ${weekOffset === 0 ? '(baseline)' : weekOffset < 0 ? `(${Math.abs(weekOffset)} wks compressed)` : `(+${weekOffset} wks extended)`}</div>
+    <div class="d">${Math.round(effectiveWeeks)} wks ${weekOffset === 0 ? '(baseline)' : `(${Math.round(baseWeeks - effectiveWeeks)} wks compressed)`}</div>
   </div>
   <div class="m" style="border-color:#16a34a">
     <div class="l">Optimal EAC</div>
@@ -3492,7 +3494,7 @@ ${cmbSvg}
 
 <div class="footer">
   <span>CRUNCH — Cost Risk Under Networked Compression Heuristics</span>
-  <span>${fmtDate(new Date())} &middot; ${scenarioType} scenario (${Math.round(calendarWeeks)} weeks)</span>
+  <span>${fmtDate(new Date())} &middot; ${scenarioType} scenario (${Math.round(effectiveWeeks)} weeks)</span>
 </div>
 
 <div class="no-print" style="text-align:center;margin-top:24px">
@@ -3759,6 +3761,28 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
       return { ...pt, baseCumulative: baseCum, adjCumulative: adjCum };
     });
 
+    // Compute per-discipline OT ranges from task-level acceleration data
+    // so discipline bars show hatching matching the exact task-level periods
+    const discAccelRange = {};
+    if (cpmForHours && cpmForHours.taskBars && otMode !== "none" && numOtWeeks > 0) {
+      const otSD = otStartWeek * 7;
+      cpmForHours.taskBars.forEach(t => {
+        if (!t.discId) return;
+        const inOtZone = t.adjEndDay > otSD;
+        const taskAccel = otScope === "zone" || t.isCritical || t.isCompressed;
+        if (inOtZone && taskAccel) {
+          const clipStart = Math.max(otSD, t.adjStartDay);
+          const clipEnd = t.adjEndDay;
+          if (!discAccelRange[t.discId]) {
+            discAccelRange[t.discId] = { startDay: clipStart, endDay: clipEnd };
+          } else {
+            discAccelRange[t.discId].startDay = Math.min(discAccelRange[t.discId].startDay, clipStart);
+            discAccelRange[t.discId].endDay = Math.max(discAccelRange[t.discId].endDay, clipEnd);
+          }
+        }
+      });
+    }
+
     // Compute Gantt bar spans for each discipline
     const ganttBars = disciplines.map((d) => {
       const origHours = hoursData[d.id] || [];
@@ -3784,6 +3808,11 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
         totalAdjHours: weeklyDirectByDisc[d.id]?.totalAdjHours || 0,
         baseCost: weeklyDirectByDisc[d.id]?.baseCost || 0,
         adjCost: weeklyDirectByDisc[d.id]?.adjCost || 0,
+        otActive: cpmForHours && cpmForHours.taskBars
+          ? !!discAccelRange[d.id]
+          : (weeklyDirectByDisc[d.id]?.otActive || false),
+        otRangeStart: discAccelRange[d.id] ? Math.floor(discAccelRange[d.id].startDay / 7) : -1,
+        otRangeEnd: discAccelRange[d.id] ? Math.ceil(discAccelRange[d.id].endDay / 7) : -1,
       };
     }).sort((a, b) => a.adjEnd - b.adjEnd);
 
@@ -3996,11 +4025,12 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
 
   const timeCostBreakdown = timeCosts.map((t) => {
     const weeklyRate = t.basis === "weekly" ? t.rate : t.rate / 4.33;
+    const ew = forecast.effectiveWeeks || calendarWeeks;
     return {
       ...t,
       baseCost: weeklyRate * baseWeeks,
-      adjCost: weeklyRate * calendarWeeks,
-      delta: weeklyRate * calendarWeeks - weeklyRate * baseWeeks,
+      adjCost: weeklyRate * ew,
+      delta: weeklyRate * ew - weeklyRate * baseWeeks,
     };
   });
 
@@ -4417,7 +4447,8 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
               adjEnd: bar.adjEnd + 1,
               rightLabel: formatCurrency(bar.adjCost),
               delta: bar.adjCost - bar.baseCost,
-              otStart: forecast.otStartWeek,
+              otStart: bar.otActive ? (bar.otRangeStart >= 0 ? bar.otRangeStart : forecast.otStartWeek) : -1,
+              otEnd: bar.otRangeEnd >= 0 ? bar.otRangeEnd : -1,
               totalBaseHours: bar.totalBaseHours,
               totalAdjHours: bar.totalAdjHours,
               baseCost: bar.baseCost,
@@ -4624,7 +4655,7 @@ function ForecastTab({ disciplines, hoursData, timeCosts, baseWeeks, startDate, 
                       {/* OT hatch overlay */}
                       {row.otStart >= 0 && row.otStart < row.adjEnd && (() => {
                         const otClipStart = Math.max(row.otStart, row.adjStart);
-                        const otClipEnd = row.adjEnd;
+                        const otClipEnd = row.otEnd > 0 ? Math.min(row.otEnd, row.adjEnd) : row.adjEnd;
                         if (otClipStart >= otClipEnd) return null;
                         const otLeftPct = (otClipStart / maxWeek) * 100;
                         const otWidthPct = ((otClipEnd - otClipStart) / maxWeek) * 100;
@@ -5841,21 +5872,22 @@ function AdjustmentsTab({ disciplines, hoursData, timeCosts, timeCostData, baseW
     } else if (effectiveWeeks > baseWeeks && maxExtension > 0) {
       globalPF = 1.0 + (EXTENSION_PF - 1.0) * ((effectiveWeeks - baseWeeks) / maxExtension);
     }
-    const getDiscPF = (discId) => {
-      const addlFactor = disciplinePFs[discId];
-      if (addlFactor !== undefined && addlFactor !== null) return globalPF * addlFactor;
-      return globalPF;
-    };
-    const cpmAdj = cpmResult ? cpmResult.hoursData : null;
-    const stackingPenalties = computeStackingPenalties(hoursData, baseWeeks, effectiveWeeks, cpmAdj);
-    const numOtWeeks = getOtWeeks(effectiveWeeks, baseWeeks, otMode);
-    const otStartWeek = effectiveWeeks - numOtWeeks;
-
     // Per-discipline compression data for task-specific OT scope
     const perDiscPFMap = (cpmResult && cpmResult.discCompression && effectiveWeeks < baseWeeks)
       ? getPerDisciplinePF(cpmResult.discCompression)
       : {};
     const hasPerDiscPF = Object.keys(perDiscPFMap).length > 0;
+
+    const getDiscPF = (discId) => {
+      const basePF = hasPerDiscPF ? (perDiscPFMap[discId] || 1.0) : globalPF;
+      const addlFactor = disciplinePFs[discId];
+      if (addlFactor !== undefined && addlFactor !== null) return basePF * addlFactor;
+      return basePF;
+    };
+    const cpmAdj = cpmResult ? cpmResult.hoursData : null;
+    const stackingPenalties = computeStackingPenalties(hoursData, baseWeeks, effectiveWeeks, cpmAdj);
+    const numOtWeeks = getOtWeeks(effectiveWeeks, baseWeeks, otMode);
+    const otStartWeek = effectiveWeeks - numOtWeeks;
 
     const discData = disciplines.map((d) => {
       const origHours = hoursData[d.id] || new Array(baseWeeks).fill(0);
@@ -5999,8 +6031,8 @@ function AdjustmentsTab({ disciplines, hoursData, timeCosts, timeCostData, baseW
               <div style={styles.metricLabel}>Schedule Change</div>
               <div style={styles.metricValue}>
                 {weekOffset === 0 && otMode !== "none"
-                  ? `${Math.round(calendarWeeks)} wks`
-                  : `${weekOffset > 0 ? "+" : ""}${weekOffset} wks`}
+                  ? `${Math.round(adjustments.effectiveWeeks || calendarWeeks)} wks`
+                  : `${Math.round(adjustments.effectiveWeeks || calendarWeeks) - baseWeeks > 0 ? "+" : ""}${Math.round(adjustments.effectiveWeeks || calendarWeeks) - baseWeeks} wks`}
               </div>
               <div style={{ fontSize: 11, color: COLORS.textDim, marginTop: 2 }}>
                 {baseEndDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })} → {adjustedEndDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
@@ -6019,7 +6051,7 @@ function AdjustmentsTab({ disciplines, hoursData, timeCosts, timeCostData, baseW
               <div style={{ ...styles.metricValue, color: adjustments.deltaTime === 0 ? COLORS.textDim : adjustments.deltaTime > 0 ? COLORS.red : COLORS.green }}>
                 {formatDelta(adjustments.deltaTime, true)}
               </div>
-              <div style={{ fontSize: 11, color: COLORS.textDim, marginTop: 2 }}>{weekOffset === 0 && otMode !== "none" ? `${Math.round(calendarWeeks)} wks vs ${baseWeeks} base` : weekOffset > 0 ? `+${weekOffset} wks burn` : `${weekOffset} wks saved`}</div>
+              <div style={{ fontSize: 11, color: COLORS.textDim, marginTop: 2 }}>{weekOffset === 0 && otMode !== "none" ? `${Math.round(adjustments.effectiveWeeks || calendarWeeks)} wks vs ${baseWeeks} base` : `${Math.round(adjustments.effectiveWeeks || calendarWeeks) - baseWeeks > 0 ? "+" : ""}${Math.round(adjustments.effectiveWeeks || calendarWeeks) - baseWeeks} wks saved`}</div>
             </div>
             <div style={{ ...styles.metric(adjustments.deltaEAC > 0 ? COLORS.red : adjustments.deltaEAC < 0 ? COLORS.green : COLORS.textDim), flex: "1 1 140px" }}>
               <div style={styles.metricLabel}>Total EAC Δ</div>
@@ -7252,6 +7284,7 @@ function CostForecastApp() {
             </div>
             <div className="sidebar-brand-text">
               <div style={{ fontFamily: DISPLAY_FONT, fontSize: 22, fontWeight: 700, letterSpacing: "3px", textTransform: "uppercase", color: COLORS.text, lineHeight: 1.1 }}>CRUNCH</div>
+              <div style={{ fontFamily: FONT, fontSize: 9, color: COLORS.textMuted, letterSpacing: "1px", marginTop: 1 }}>v{APP_VERSION}</div>
             </div>
           </div>
         </div>
@@ -7485,7 +7518,7 @@ function CostForecastApp() {
               <div style={{ fontSize: 11, color: COLORS.accent, textTransform: "uppercase" }}>Adjusted End</div>
               <div style={{ fontSize: 15, fontWeight: 700, color: COLORS.accent }}>{adjustedEndDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</div>
               <div style={{ fontSize: 11, color: COLORS.accent }}>
-                {Math.round(calendarWeeks)} weeks
+                {Math.round(sidebarEffectiveWeeks)} weeks
               </div>
             </div>
             <div style={{ width: 1, background: COLORS.border }} />
@@ -7493,12 +7526,12 @@ function CostForecastApp() {
               <div style={{ fontSize: 11, color: COLORS.textDim, textTransform: "uppercase" }}>
                 {otMode !== "none" && weekOffset < 0 ? "OT Schedule" : "Schedule Δ"}
               </div>
-              <div style={{ fontSize: 15, fontWeight: 600, color: Math.round(calendarWeeks) === baseWeeks ? COLORS.textDim : Math.round(calendarWeeks) < baseWeeks ? COLORS.green : COLORS.red }}>
-                {Math.round(calendarWeeks) === baseWeeks ? "—" : `${Math.round(calendarWeeks) - baseWeeks} weeks`}
+              <div style={{ fontSize: 15, fontWeight: 600, color: Math.round(sidebarEffectiveWeeks) === baseWeeks ? COLORS.textDim : Math.round(sidebarEffectiveWeeks) < baseWeeks ? COLORS.green : COLORS.red }}>
+                {Math.round(sidebarEffectiveWeeks) === baseWeeks ? "—" : `${Math.round(sidebarEffectiveWeeks) - baseWeeks} weeks`}
               </div>
               {otMode !== "none" && weekOffset < 0 && (
                 <div style={{ fontSize: 11, color: COLORS.orange }}>
-                  {getOtWeeks(adjustedWeeks, baseWeeks, otMode)} of {adjustedWeeks} wks OT ({Math.round(getOtUtilization(adjustedWeeks, baseWeeks, otMode) * 100)}%)
+                  {getOtWeeks(sidebarEffectiveWeeks, baseWeeks, otMode)} of {Math.round(sidebarEffectiveWeeks)} wks OT ({Math.round(getOtUtilization(sidebarEffectiveWeeks, baseWeeks, otMode) * 100)}%)
                 </div>
               )}
               {otMode !== "none" && weekOffset === 0 && (
